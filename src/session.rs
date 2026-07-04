@@ -33,13 +33,13 @@ pub struct SessionStore {
 }
 
 struct SessionState {
-    sessions: HashMap<(String, String), SessionEntry>,
-    session_order: VecDeque<(String, String)>,
-    reasoning: HashMap<(String, String), StoredString>,
-    reasoning_order: VecDeque<(String, String)>,
-    /// (provider, content fingerprint) -> reasoning_content
-    turn_reasoning: HashMap<(String, u64), StoredString>,
-    turn_reasoning_order: VecDeque<(String, u64)>,
+    sessions: HashMap<String, SessionEntry>,
+    session_order: VecDeque<String>,
+    reasoning: HashMap<String, StoredString>,
+    reasoning_order: VecDeque<String>,
+    /// content fingerprint -> reasoning_content
+    turn_reasoning: HashMap<u64, StoredString>,
+    turn_reasoning_order: VecDeque<u64>,
     stored_bytes: usize,
     max_sessions: usize,
     max_stored_bytes: usize,
@@ -51,6 +51,9 @@ struct SessionEntry {
     messages: Option<Vec<ChatMessage>>,
     bytes: usize,
     last_used_at: SystemTime,
+    /// Last upstream route that wrote this session (also indexed in SQLite).
+    #[allow(dead_code)]
+    provider: String,
 }
 
 struct StoredString {
@@ -61,7 +64,6 @@ struct StoredString {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct DiskSessionRecord {
-    pub(crate) schema_version: u32,
     pub(crate) provider: String,
     pub(crate) response_id: String,
     pub(crate) created_at_unix_ms: u128,
@@ -72,7 +74,6 @@ pub(crate) struct DiskSessionRecord {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct DiskReasoningRecord {
-    pub(crate) schema_version: u32,
     pub(crate) provider: String,
     pub(crate) key: String,
     pub(crate) created_at_unix_ms: u128,
@@ -157,12 +158,12 @@ impl SessionStore {
     }
 
     /// Look up stored reasoning_content for a call_id.
-    pub fn get_reasoning(&self, provider: &str, call_id: &str) -> Option<String> {
+    pub fn get_reasoning(&self, call_id: &str) -> Option<String> {
         let mut state = self.state.lock().expect("session store mutex poisoned");
         state.enforce_limits();
-        let value = state.load_reasoning_value(provider, call_id);
+        let value = state.load_reasoning_value(call_id);
         if value.is_some() {
-            state.touch_reasoning(provider, call_id);
+            state.touch_reasoning(call_id);
         }
         value
     }
@@ -203,7 +204,6 @@ impl SessionStore {
     /// Look up reasoning_content for an assistant turn by its text content.
     pub fn get_turn_reasoning(
         &self,
-        provider: &str,
         _prior: &[ChatMessage],
         assistant: &ChatMessage,
     ) -> Option<String> {
@@ -214,9 +214,9 @@ impl SessionStore {
         let key = Self::content_key(content);
         let mut state = self.state.lock().expect("session store mutex poisoned");
         state.enforce_limits();
-        let value = state.load_turn_reasoning_value(provider, key);
+        let value = state.load_turn_reasoning_value(key);
         if value.is_some() {
-            state.touch_turn_reasoning(provider, key);
+            state.touch_turn_reasoning(key);
         }
         value
     }
@@ -229,12 +229,12 @@ impl SessionStore {
     }
 
     /// Retrieve history for a prior response_id, or empty vec if not found.
-    pub fn get_history(&self, provider: &str, response_id: &str) -> Vec<ChatMessage> {
+    pub fn get_history(&self, response_id: &str) -> Vec<ChatMessage> {
         let mut state = self.state.lock().expect("session store mutex poisoned");
         state.enforce_limits();
-        let messages = state.load_session_messages(provider, response_id);
+        let messages = state.load_session_messages(response_id);
         if !messages.is_empty() {
-            state.touch_session(provider, response_id);
+            state.touch_session(response_id);
         }
         messages
     }
@@ -282,7 +282,7 @@ impl SessionState {
         sessions.sort_by_key(|record| record.last_used_at_unix_ms);
         for record in sessions {
             let last_used_at = system_time_from_millis(record.last_used_at_unix_ms);
-            let key = (record.provider.clone(), record.response_id.clone());
+            let key = record.response_id.clone();
             self.stored_bytes = self.stored_bytes.saturating_add(record.bytes);
             self.sessions.insert(
                 key.clone(),
@@ -290,6 +290,7 @@ impl SessionState {
                     messages: None,
                     bytes: record.bytes,
                     last_used_at,
+                    provider: record.provider,
                 },
             );
             self.session_order.push_back(key);
@@ -299,7 +300,7 @@ impl SessionState {
         reasoning.sort_by_key(|record| record.last_used_at_unix_ms);
         for record in reasoning {
             let last_used_at = system_time_from_millis(record.last_used_at_unix_ms);
-            let key = (record.provider.clone(), record.key.clone());
+            let key = record.key.clone();
             self.stored_bytes = self.stored_bytes.saturating_add(record.bytes);
             self.reasoning.insert(
                 key.clone(),
@@ -323,36 +324,35 @@ impl SessionState {
                 continue;
             };
             let last_used_at = system_time_from_millis(record.last_used_at_unix_ms);
-            let key = (record.provider.clone(), hash);
             self.stored_bytes = self.stored_bytes.saturating_add(record.bytes);
             self.turn_reasoning.insert(
-                key.clone(),
+                hash,
                 StoredString {
                     value: None,
                     bytes: record.bytes,
                     last_used_at,
                 },
             );
-            self.turn_reasoning_order.push_back(key);
+            self.turn_reasoning_order.push_back(hash);
         }
     }
 
     fn insert_session(&mut self, provider: &str, id: String, messages: Vec<ChatMessage>) {
         let bytes = messages_bytes(&messages);
         if bytes > self.max_stored_bytes {
-            self.remove_session(provider, &id);
+            self.remove_session(&id);
             warn!(
-                "session {provider}/{id} is {} bytes, above {} byte retention limit; not caching history",
+                "session {id} is {} bytes, above {} byte retention limit; not caching history",
                 bytes, self.max_stored_bytes
             );
             return;
         }
 
-        self.remove_session(provider, &id);
+        self.remove_session(&id);
         let now = SystemTime::now();
         let messages_to_store = if let Some(sqlite) = &self.sqlite {
             if let Err(e) = sqlite.write_session(provider, &id, now, now, bytes, &messages) {
-                warn!("failed to persist session {provider}/{id}: {e}");
+                warn!("failed to persist session {id}: {e}");
                 Some(messages)
             } else {
                 None
@@ -361,20 +361,20 @@ impl SessionState {
             Some(messages)
         };
         self.stored_bytes = self.stored_bytes.saturating_add(bytes);
-        let key = (provider.to_string(), id.clone());
         self.sessions.insert(
-            key.clone(),
+            id.clone(),
             SessionEntry {
                 messages: messages_to_store,
                 bytes,
                 last_used_at: now,
+                provider: provider.to_string(),
             },
         );
-        self.session_order.push_back(key);
+        self.session_order.push_back(id);
     }
 
     fn insert_reasoning(&mut self, provider: &str, call_id: String, reasoning: String) {
-        let key = (provider.to_string(), call_id.clone());
+        let key = call_id.clone();
         if let Some(old) = self.reasoning.remove(&key) {
             self.stored_bytes = self.stored_bytes.saturating_sub(old.bytes);
         }
@@ -385,7 +385,7 @@ impl SessionState {
         let value_to_store = if let Some(sqlite) = &self.sqlite {
             if let Err(e) = sqlite.write_reasoning(provider, &call_id, now, now, bytes, &reasoning)
             {
-                warn!("failed to persist reasoning {provider}/{call_id}: {e}");
+                warn!("failed to persist reasoning {call_id}: {e}");
                 Some(reasoning)
             } else {
                 None
@@ -406,12 +406,10 @@ impl SessionState {
     }
 
     fn insert_turn_reasoning(&mut self, provider: &str, hash: u64, reasoning: String) {
-        let key = (provider.to_string(), hash);
-        if let Some(old) = self.turn_reasoning.remove(&key) {
+        if let Some(old) = self.turn_reasoning.remove(&hash) {
             self.stored_bytes = self.stored_bytes.saturating_sub(old.bytes);
         }
-        self.turn_reasoning_order
-            .retain(|existing| existing != &key);
+        self.turn_reasoning_order.retain(|existing| existing != &hash);
 
         let bytes = std::mem::size_of::<u64>().saturating_add(reasoning.len());
         let key_string = hash.to_string();
@@ -420,7 +418,7 @@ impl SessionState {
             if let Err(e) =
                 sqlite.write_turn_reasoning(provider, &key_string, now, now, bytes, &reasoning)
             {
-                warn!("failed to persist turn reasoning {provider}/{hash}: {e}");
+                warn!("failed to persist turn reasoning {hash}: {e}");
                 Some(reasoning)
             } else {
                 None
@@ -430,14 +428,14 @@ impl SessionState {
         };
         self.stored_bytes = self.stored_bytes.saturating_add(bytes);
         self.turn_reasoning.insert(
-            key.clone(),
+            hash,
             StoredString {
                 value: value_to_store,
                 bytes,
                 last_used_at: now,
             },
         );
-        self.turn_reasoning_order.push_back(key);
+        self.turn_reasoning_order.push_back(hash);
     }
 
     fn enforce_limits(&mut self) {
@@ -497,18 +495,17 @@ impl SessionState {
         }
     }
 
-    fn remove_session(&mut self, provider: &str, id: &str) {
-        let key = (provider.to_string(), id.to_string());
-        self.session_order.retain(|existing| existing != &key);
-        self.remove_session_entry(&key);
+    fn remove_session(&mut self, id: &str) {
+        self.session_order.retain(|existing| existing != id);
+        self.remove_session_entry(id);
     }
 
-    fn remove_session_entry(&mut self, key: &(String, String)) {
+    fn remove_session_entry(&mut self, key: &str) {
         if let Some(entry) = self.sessions.remove(key) {
             self.stored_bytes = self.stored_bytes.saturating_sub(entry.bytes);
         }
         if let Some(sqlite) = &self.sqlite {
-            sqlite.remove_session(&key.0, &key.1);
+            sqlite.remove_session(key);
         }
     }
 
@@ -518,7 +515,7 @@ impl SessionState {
                 self.stored_bytes = self.stored_bytes.saturating_sub(entry.bytes);
             }
             if let Some(sqlite) = &self.sqlite {
-                sqlite.remove_reasoning(&key.0, &key.1);
+                sqlite.remove_reasoning(&key);
             }
         }
     }
@@ -529,69 +526,65 @@ impl SessionState {
                 self.stored_bytes = self.stored_bytes.saturating_sub(entry.bytes);
             }
             if let Some(sqlite) = &self.sqlite {
-                sqlite.remove_turn_reasoning(&key.0, key.1);
+                sqlite.remove_turn_reasoning(key);
             }
         }
     }
 
-    fn touch_session(&mut self, provider: &str, id: &str) {
-        let key = (provider.to_string(), id.to_string());
+    fn touch_session(&mut self, id: &str) {
         let now = SystemTime::now();
-        if let Some(entry) = self.sessions.get_mut(&key) {
+        if let Some(entry) = self.sessions.get_mut(id) {
             entry.last_used_at = now;
         }
         if let Some(sqlite) = &self.sqlite
-            && let Some(mut record) = sqlite.read_session(provider, id)
+            && let Some(mut record) = sqlite.read_session(id)
         {
             record.last_used_at_unix_ms = system_time_millis(now);
             if let Err(e) = sqlite.write_session_record(&record) {
-                warn!("failed to touch sqlite session {provider}/{id}: {e}");
+                warn!("failed to touch sqlite session {id}: {e}");
             }
         }
-        self.session_order.retain(|existing| existing != &key);
-        self.session_order.push_back(key);
+        self.session_order.retain(|existing| existing != id);
+        self.session_order.push_back(id.to_string());
     }
 
-    fn touch_reasoning(&mut self, provider: &str, call_id: &str) {
-        let key = (provider.to_string(), call_id.to_string());
+    fn touch_reasoning(&mut self, call_id: &str) {
         let now = SystemTime::now();
-        if let Some(entry) = self.reasoning.get_mut(&key) {
+        if let Some(entry) = self.reasoning.get_mut(call_id) {
             entry.last_used_at = now;
         }
         if let Some(sqlite) = &self.sqlite
-            && let Some(mut record) = sqlite.read_reasoning(provider, call_id)
+            && let Some(mut record) = sqlite.read_reasoning(call_id)
         {
             record.last_used_at_unix_ms = system_time_millis(now);
             if let Err(e) = sqlite.write_reasoning_record(&record) {
-                warn!("failed to touch sqlite reasoning {provider}/{call_id}: {e}");
+                warn!("failed to touch sqlite reasoning {call_id}: {e}");
             }
         }
-        self.reasoning_order.retain(|existing| existing != &key);
-        self.reasoning_order.push_back(key);
+        self.reasoning_order.retain(|existing| existing != call_id);
+        self.reasoning_order.push_back(call_id.to_string());
     }
 
-    fn touch_turn_reasoning(&mut self, provider: &str, hash: u64) {
-        let key = (provider.to_string(), hash);
+    fn touch_turn_reasoning(&mut self, hash: u64) {
         let now = SystemTime::now();
-        if let Some(entry) = self.turn_reasoning.get_mut(&key) {
+        if let Some(entry) = self.turn_reasoning.get_mut(&hash) {
             entry.last_used_at = now;
         }
         if let Some(sqlite) = &self.sqlite
-            && let Some(mut record) = sqlite.read_turn_reasoning(provider, hash)
+            && let Some(mut record) = sqlite.read_turn_reasoning(hash)
         {
             record.last_used_at_unix_ms = system_time_millis(now);
             if let Err(e) = sqlite.write_turn_reasoning_record(&record) {
-                warn!("failed to touch sqlite turn reasoning {provider}/{hash}: {e}");
+                warn!("failed to touch sqlite turn reasoning {hash}: {e}");
             }
         }
         self.turn_reasoning_order
-            .retain(|existing| existing != &key);
-        self.turn_reasoning_order.push_back(key);
+            .retain(|existing| existing != &hash);
+        self.turn_reasoning_order.push_back(hash);
     }
 
-    fn load_session_messages(&self, provider: &str, id: &str) -> Vec<ChatMessage> {
-        let key = (provider.to_string(), id.to_string());
-        let Some(entry) = self.sessions.get(&key) else {
+    fn load_session_messages(&self, id: &str) -> Vec<ChatMessage> {
+        let Some(entry) = self.sessions.get(id) else {
             return Vec::new();
         };
         if let Some(messages) = &entry.messages {
@@ -599,32 +592,30 @@ impl SessionState {
         }
         self.sqlite
             .as_ref()
-            .and_then(|sqlite| sqlite.read_session(provider, id))
+            .and_then(|sqlite| sqlite.read_session(id))
             .map(|record| record.messages)
             .unwrap_or_default()
     }
 
-    fn load_reasoning_value(&self, provider: &str, call_id: &str) -> Option<String> {
-        let key = (provider.to_string(), call_id.to_string());
-        let entry = self.reasoning.get(&key)?;
+    fn load_reasoning_value(&self, call_id: &str) -> Option<String> {
+        let entry = self.reasoning.get(call_id)?;
         if let Some(value) = &entry.value {
             return Some(value.clone());
         }
         self.sqlite
             .as_ref()
-            .and_then(|sqlite| sqlite.read_reasoning(provider, call_id))
+            .and_then(|sqlite| sqlite.read_reasoning(call_id))
             .map(|record| record.value)
     }
 
-    fn load_turn_reasoning_value(&self, provider: &str, hash: u64) -> Option<String> {
-        let key = (provider.to_string(), hash);
-        let entry = self.turn_reasoning.get(&key)?;
+    fn load_turn_reasoning_value(&self, hash: u64) -> Option<String> {
+        let entry = self.turn_reasoning.get(&hash)?;
         if let Some(value) = &entry.value {
             return Some(value.clone());
         }
         self.sqlite
             .as_ref()
-            .and_then(|sqlite| sqlite.read_turn_reasoning(provider, hash))
+            .and_then(|sqlite| sqlite.read_turn_reasoning(hash))
             .map(|record| record.value)
     }
 }
@@ -710,36 +701,36 @@ mod tests {
     }
 
     fn temp_db(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("crabridge-{name}-{}.db", Uuid::new_v4().simple()))
+        std::env::temp_dir().join(format!("crabbridge-{name}-{}.db", Uuid::new_v4().simple()))
     }
 
     #[test]
     fn test_store_and_get_reasoning() {
         let store = SessionStore::new();
-        store.store_reasoning(TEST_PROVIDER,"call_1".into(), "think".into());
-        assert_eq!(store.get_reasoning(TEST_PROVIDER,"call_1"), Some("think".into()));
+        store.store_reasoning(TEST_PROVIDER, "call_1".into(), "think".into());
+        assert_eq!(store.get_reasoning("call_1"), Some("think".into()));
     }
 
     #[test]
     fn test_get_reasoning_missing() {
         let store = SessionStore::new();
-        assert_eq!(store.get_reasoning(TEST_PROVIDER,"nonexistent"), None);
+        assert_eq!(store.get_reasoning("nonexistent"), None);
     }
 
     #[test]
     fn test_empty_reasoning_not_stored() {
         let store = SessionStore::new();
-        store.store_reasoning(TEST_PROVIDER,"call_e".into(), "".into());
-        assert_eq!(store.get_reasoning(TEST_PROVIDER,"call_e"), None);
+        store.store_reasoning(TEST_PROVIDER, "call_e".into(), "".into());
+        assert_eq!(store.get_reasoning("call_e"), None);
     }
 
     #[test]
     fn test_turn_reasoning_by_content() {
         let store = SessionStore::new();
         let assistant = msg("assistant", Some("hello world"));
-        store.store_turn_reasoning(TEST_PROVIDER,&[], &assistant, "deep thought".into());
+        store.store_turn_reasoning(TEST_PROVIDER, &[], &assistant, "deep thought".into());
         assert_eq!(
-            store.get_turn_reasoning(TEST_PROVIDER,&[], &assistant),
+            store.get_turn_reasoning(&[], &assistant),
             Some("deep thought".into())
         );
     }
@@ -748,8 +739,8 @@ mod tests {
     fn test_turn_reasoning_empty_content() {
         let store = SessionStore::new();
         let assistant = msg("assistant", Some(""));
-        store.store_turn_reasoning(TEST_PROVIDER,&[], &assistant, "reason".into());
-        assert_eq!(store.get_turn_reasoning(TEST_PROVIDER,&[], &assistant), None);
+        store.store_turn_reasoning(TEST_PROVIDER, &[], &assistant, "reason".into());
+        assert_eq!(store.get_turn_reasoning(&[], &assistant), None);
     }
 
     #[test]
@@ -761,23 +752,31 @@ mod tests {
             "type": "function",
             "function": {"name": "exec", "arguments": "{}"}
         })]);
-        store.store_turn_reasoning(TEST_PROVIDER,&[], &assistant, "reason_tc".into());
-        assert_eq!(store.get_reasoning(TEST_PROVIDER,"call_123"), Some("reason_tc".into()));
+        store.store_turn_reasoning(TEST_PROVIDER, &[], &assistant, "reason_tc".into());
+        assert_eq!(store.get_reasoning("call_123"), Some("reason_tc".into()));
     }
 
     #[test]
     fn test_history_save_and_get() {
         let store = SessionStore::new();
         let msgs = vec![msg("user", Some("hi")), msg("assistant", Some("hey"))];
-        let id = store.save(TEST_PROVIDER,msgs.clone());
-        let got = store.get_history(TEST_PROVIDER,&id);
+        let id = store.save(TEST_PROVIDER, msgs.clone());
+        let got = store.get_history(&id);
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].text_content(), "hi");
 
-        // save_with_id
         let id2 = store.new_id();
         store.save_with_id(TEST_PROVIDER, id2.clone(), vec![msg("user", Some("q"))]);
-        assert_eq!(store.get_history(TEST_PROVIDER,&id2).len(), 1);
+        assert_eq!(store.get_history(&id2).len(), 1);
+    }
+
+    #[test]
+    fn history_shared_across_providers_updates_provider_index() {
+        let store = SessionStore::new();
+        let id = store.save("deepseek", vec![msg("user", Some("hello"))]);
+        assert_eq!(store.get_history(&id).len(), 1);
+        store.save_with_id("kimi", id.clone(), vec![msg("user", Some("hello")), msg("assistant", Some("hi"))]);
+        assert_eq!(store.get_history(&id).len(), 2);
     }
 
     #[test]
@@ -792,43 +791,43 @@ mod tests {
     #[test]
     fn test_evicts_oldest_session_by_count() {
         let store = SessionStore::with_limits(2, 1024);
-        let id1 = store.save(TEST_PROVIDER,vec![msg("user", Some("one"))]);
-        let id2 = store.save(TEST_PROVIDER,vec![msg("user", Some("two"))]);
-        let id3 = store.save(TEST_PROVIDER,vec![msg("user", Some("three"))]);
+        let id1 = store.save(TEST_PROVIDER, vec![msg("user", Some("one"))]);
+        let id2 = store.save(TEST_PROVIDER, vec![msg("user", Some("two"))]);
+        let id3 = store.save(TEST_PROVIDER, vec![msg("user", Some("three"))]);
 
-        assert!(store.get_history(TEST_PROVIDER,&id1).is_empty());
-        assert_eq!(store.get_history(TEST_PROVIDER,&id2).len(), 1);
-        assert_eq!(store.get_history(TEST_PROVIDER,&id3).len(), 1);
+        assert!(store.get_history(&id1).is_empty());
+        assert_eq!(store.get_history(&id2).len(), 1);
+        assert_eq!(store.get_history(&id3).len(), 1);
     }
 
     #[test]
     fn test_evicts_oldest_session_by_bytes() {
         let store = SessionStore::with_limits(10, 64);
-        let id1 = store.save(TEST_PROVIDER,vec![msg("user", Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))]);
-        let id2 = store.save(TEST_PROVIDER,vec![msg("user", Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))]);
-        let id3 = store.save(TEST_PROVIDER,vec![msg("user", Some("c"))]);
+        let id1 = store.save(TEST_PROVIDER, vec![msg("user", Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))]);
+        let id2 = store.save(TEST_PROVIDER, vec![msg("user", Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))]);
+        let id3 = store.save(TEST_PROVIDER, vec![msg("user", Some("c"))]);
 
-        assert!(store.get_history(TEST_PROVIDER,&id1).is_empty());
-        assert_eq!(store.get_history(TEST_PROVIDER,&id2).len(), 1);
-        assert_eq!(store.get_history(TEST_PROVIDER,&id3).len(), 1);
+        assert!(store.get_history(&id1).is_empty());
+        assert_eq!(store.get_history(&id2).len(), 1);
+        assert_eq!(store.get_history(&id3).len(), 1);
     }
 
     #[test]
     fn test_oversized_session_not_cached() {
         let store = SessionStore::with_limits(10, 10);
-        let id = store.save(TEST_PROVIDER,vec![msg("user", Some("this message is too large"))]);
-        assert!(store.get_history(TEST_PROVIDER,&id).is_empty());
+        let id = store.save(TEST_PROVIDER, vec![msg("user", Some("this message is too large"))]);
+        assert!(store.get_history(&id).is_empty());
     }
 
     #[test]
     fn test_reasoning_entries_are_bounded_by_bytes() {
         let store = SessionStore::with_limits(10, 36);
-        store.store_reasoning(TEST_PROVIDER,"call_1".into(), "aaaaaaaaaaaaaaaaaaaaaaaa".into());
-        store.store_reasoning(TEST_PROVIDER,"call_2".into(), "bbbbbbbbbbbbbbbbbbbbbbbb".into());
+        store.store_reasoning(TEST_PROVIDER, "call_1".into(), "aaaaaaaaaaaaaaaaaaaaaaaa".into());
+        store.store_reasoning(TEST_PROVIDER, "call_2".into(), "bbbbbbbbbbbbbbbbbbbbbbbb".into());
 
-        assert_eq!(store.get_reasoning(TEST_PROVIDER,"call_1"), None);
+        assert_eq!(store.get_reasoning("call_1"), None);
         assert_eq!(
-            store.get_reasoning(TEST_PROVIDER,"call_2"),
+            store.get_reasoning("call_2"),
             Some("bbbbbbbbbbbbbbbbbbbbbbbb".into())
         );
     }
@@ -836,39 +835,37 @@ mod tests {
     #[test]
     fn test_cleanup_removes_expired_session() {
         let store = SessionStore::with_limits_and_ttl(10, 1024, Duration::from_secs(60));
-        let id = store.save(TEST_PROVIDER,vec![msg("user", Some("old"))]);
+        let id = store.save(TEST_PROVIDER, vec![msg("user", Some("old"))]);
 
         {
             let mut state = store.state.lock().unwrap();
             state
                 .sessions
-                .get_mut(&(TEST_PROVIDER.to_string(), id.clone()))
+                .get_mut(&id)
                 .unwrap()
-                .last_used_at =
-                SystemTime::now() - Duration::from_secs(61);
+                .last_used_at = SystemTime::now() - Duration::from_secs(61);
         }
 
         store.cleanup();
-        assert!(store.get_history(TEST_PROVIDER,&id).is_empty());
+        assert!(store.get_history(&id).is_empty());
     }
 
     #[test]
     fn test_cleanup_removes_expired_reasoning() {
         let store = SessionStore::with_limits_and_ttl(10, 1024, Duration::from_secs(60));
-        store.store_reasoning(TEST_PROVIDER,"call_old".into(), "old thought".into());
+        store.store_reasoning(TEST_PROVIDER, "call_old".into(), "old thought".into());
 
         {
             let mut state = store.state.lock().unwrap();
             state
                 .reasoning
-                .get_mut(&(TEST_PROVIDER.to_string(), "call_old".into()))
+                .get_mut("call_old")
                 .unwrap()
-                .last_used_at =
-                SystemTime::now() - Duration::from_secs(61);
+                .last_used_at = SystemTime::now() - Duration::from_secs(61);
         }
 
         store.cleanup();
-        assert_eq!(store.get_reasoning(TEST_PROVIDER,"call_old"), None);
+        assert_eq!(store.get_reasoning("call_old"), None);
     }
 
     #[test]
@@ -878,13 +875,13 @@ mod tests {
             let store =
                 SessionStore::with_sqlite_limits_and_ttl(&db, 10, 1024, Duration::from_secs(60))
                     .unwrap();
-            store.save(TEST_PROVIDER,vec![msg("user", Some("hi")), msg("assistant", Some("hey"))])
+            store.save(TEST_PROVIDER, vec![msg("user", Some("hi")), msg("assistant", Some("hey"))])
         };
 
         let store =
             SessionStore::with_sqlite_limits_and_ttl(&db, 10, 1024, Duration::from_secs(60))
                 .unwrap();
-        let got = store.get_history(TEST_PROVIDER,&id);
+        let got = store.get_history(&id);
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].text_content(), "hi");
         assert!(db.exists());
@@ -897,13 +894,13 @@ mod tests {
             let store =
                 SessionStore::with_sqlite_limits_and_ttl(&db, 10, 1024, Duration::from_secs(60))
                     .unwrap();
-            store.store_reasoning(TEST_PROVIDER,"call_1".into(), "think".into());
+            store.store_reasoning(TEST_PROVIDER, "call_1".into(), "think".into());
         }
 
         let store =
             SessionStore::with_sqlite_limits_and_ttl(&db, 10, 1024, Duration::from_secs(60))
                 .unwrap();
-        assert_eq!(store.get_reasoning(TEST_PROVIDER,"call_1"), Some("think".into()));
+        assert_eq!(store.get_reasoning("call_1"), Some("think".into()));
     }
 
     #[test]
@@ -914,14 +911,14 @@ mod tests {
             let store =
                 SessionStore::with_sqlite_limits_and_ttl(&db, 10, 1024, Duration::from_secs(60))
                     .unwrap();
-            store.store_turn_reasoning(TEST_PROVIDER,&[], &assistant, "deep thought".into());
+            store.store_turn_reasoning(TEST_PROVIDER, &[], &assistant, "deep thought".into());
         }
 
         let store =
             SessionStore::with_sqlite_limits_and_ttl(&db, 10, 1024, Duration::from_secs(60))
                 .unwrap();
         assert_eq!(
-            store.get_turn_reasoning(TEST_PROVIDER,&[], &assistant),
+            store.get_turn_reasoning(&[], &assistant),
             Some("deep thought".into())
         );
     }
@@ -931,10 +928,10 @@ mod tests {
         let db = temp_db("evict");
         let store = SessionStore::with_sqlite_limits_and_ttl(&db, 1, 1024, Duration::from_secs(60))
             .unwrap();
-        let id1 = store.save(TEST_PROVIDER,vec![msg("user", Some("one"))]);
-        let id2 = store.save(TEST_PROVIDER,vec![msg("user", Some("two"))]);
+        let id1 = store.save(TEST_PROVIDER, vec![msg("user", Some("one"))]);
+        let id2 = store.save(TEST_PROVIDER, vec![msg("user", Some("two"))]);
 
-        assert!(store.get_history(TEST_PROVIDER,&id1).is_empty());
-        assert_eq!(store.get_history(TEST_PROVIDER,&id2).len(), 1);
+        assert!(store.get_history(&id1).is_empty());
+        assert_eq!(store.get_history(&id2).len(), 1);
     }
 }

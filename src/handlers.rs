@@ -204,7 +204,7 @@ async fn handle_responses_inner(
     let mut history = req
         .previous_response_id
         .as_deref()
-        .map(|id| state.sessions.get_history(provider, id))
+        .map(|id| state.sessions.get_history(id))
         .unwrap_or_default();
     let history_messages = history.len();
     if should_isolate_spawn_child_request(&req, &history) {
@@ -218,7 +218,6 @@ async fn handle_responses_inner(
         &req,
         history,
         &state.sessions,
-        provider,
         runtime.default_model.as_str(),
         runtime.model_map.as_deref(),
         runtime.default_max_tokens,

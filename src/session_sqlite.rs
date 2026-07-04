@@ -30,7 +30,7 @@ impl SqliteStore {
         )
         .map_err(io::Error::other)?;
 
-        migrate_schema(&conn)?;
+        init_schema(&conn)?;
 
         Ok(Self { conn })
     }
@@ -45,7 +45,6 @@ impl SqliteStore {
         messages: &[ChatMessage],
     ) -> io::Result<()> {
         self.write_session_record(&DiskSessionRecord {
-            schema_version: 2,
             provider: provider.to_string(),
             response_id: id.to_string(),
             created_at_unix_ms: system_time_millis(created_at),
@@ -59,15 +58,16 @@ impl SqliteStore {
         let messages_json = serde_json::to_string(&record.messages).map_err(io::Error::other)?;
         self.conn
             .execute(
-                "INSERT INTO sessions (provider, response_id, created_at_ms, last_used_at_ms, bytes, messages_json)
+                "INSERT INTO sessions (response_id, provider, created_at_ms, last_used_at_ms, bytes, messages_json)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(provider, response_id) DO UPDATE SET
+                 ON CONFLICT(response_id) DO UPDATE SET
+                   provider = excluded.provider,
                    last_used_at_ms = excluded.last_used_at_ms,
                    bytes = excluded.bytes,
                    messages_json = excluded.messages_json",
                 params![
-                    record.provider,
                     record.response_id,
+                    record.provider,
                     record.created_at_unix_ms as i64,
                     record.last_used_at_unix_ms as i64,
                     record.bytes as i64,
@@ -78,23 +78,22 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub fn read_session(&self, provider: &str, id: &str) -> Option<DiskSessionRecord> {
+    pub fn read_session(&self, id: &str) -> Option<DiskSessionRecord> {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT provider, response_id, created_at_ms, last_used_at_ms, bytes, messages_json
-                 FROM sessions WHERE provider = ?1 AND response_id = ?2",
+                "SELECT response_id, provider, created_at_ms, last_used_at_ms, bytes, messages_json
+                 FROM sessions WHERE response_id = ?1",
             )
             .ok()?;
-        let mut rows = stmt.query(params![provider, id]).ok()?;
+        let mut rows = stmt.query(params![id]).ok()?;
         let row = rows.next().ok()??;
         row_to_session_record(row).ok()
     }
 
     pub fn load_sessions(&self) -> Vec<DiskSessionRecord> {
         let mut stmt = match self.conn.prepare(
-            "SELECT provider, response_id, created_at_ms, last_used_at_ms, bytes, messages_json
-             FROM sessions",
+            "SELECT response_id, provider, created_at_ms, last_used_at_ms, bytes, messages_json FROM sessions",
         ) {
             Ok(stmt) => stmt,
             Err(e) => {
@@ -103,7 +102,7 @@ impl SqliteStore {
             }
         };
 
-        let rows = match stmt.query_map([], |row| row_to_session_record(row)) {
+        let rows = match stmt.query_map([], row_to_session_record) {
             Ok(rows) => rows,
             Err(e) => {
                 warn!("failed to query sqlite sessions: {e}");
@@ -114,12 +113,12 @@ impl SqliteStore {
         rows.filter_map(Result::ok).collect()
     }
 
-    pub fn remove_session(&self, provider: &str, id: &str) {
+    pub fn remove_session(&self, id: &str) {
         if let Err(e) = self.conn.execute(
-            "DELETE FROM sessions WHERE provider = ?1 AND response_id = ?2",
-            params![provider, id],
+            "DELETE FROM sessions WHERE response_id = ?1",
+            params![id],
         ) {
-            warn!("failed to delete sqlite session {provider}/{id}: {e}");
+            warn!("failed to delete sqlite session {id}: {e}");
         }
     }
 
@@ -133,7 +132,6 @@ impl SqliteStore {
         value: &str,
     ) -> io::Result<()> {
         self.write_reasoning_record(&DiskReasoningRecord {
-            schema_version: 2,
             provider: provider.to_string(),
             key: key.to_string(),
             created_at_unix_ms: system_time_millis(created_at),
@@ -146,15 +144,16 @@ impl SqliteStore {
     pub fn write_reasoning_record(&self, record: &DiskReasoningRecord) -> io::Result<()> {
         self.conn
             .execute(
-                "INSERT INTO reasoning (provider, key, created_at_ms, last_used_at_ms, bytes, value)
+                "INSERT INTO reasoning (key, provider, created_at_ms, last_used_at_ms, bytes, value)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(provider, key) DO UPDATE SET
+                 ON CONFLICT(key) DO UPDATE SET
+                   provider = excluded.provider,
                    last_used_at_ms = excluded.last_used_at_ms,
                    bytes = excluded.bytes,
                    value = excluded.value",
                 params![
-                    record.provider,
                     record.key,
+                    record.provider,
                     record.created_at_unix_ms as i64,
                     record.last_used_at_unix_ms as i64,
                     record.bytes as i64,
@@ -165,20 +164,20 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub fn read_reasoning(&self, provider: &str, key: &str) -> Option<DiskReasoningRecord> {
-        self.read_reasoning_row("reasoning", provider, key)
+    pub fn read_reasoning(&self, key: &str) -> Option<DiskReasoningRecord> {
+        self.read_reasoning_row("reasoning", key)
     }
 
     pub fn load_reasoning(&self) -> Vec<DiskReasoningRecord> {
         self.load_reasoning_rows("reasoning")
     }
 
-    pub fn remove_reasoning(&self, provider: &str, key: &str) {
+    pub fn remove_reasoning(&self, key: &str) {
         if let Err(e) = self.conn.execute(
-            "DELETE FROM reasoning WHERE provider = ?1 AND key = ?2",
-            params![provider, key],
+            "DELETE FROM reasoning WHERE key = ?1",
+            params![key],
         ) {
-            warn!("failed to delete sqlite reasoning {provider}/{key}: {e}");
+            warn!("failed to delete sqlite reasoning {key}: {e}");
         }
     }
 
@@ -192,7 +191,6 @@ impl SqliteStore {
         value: &str,
     ) -> io::Result<()> {
         self.write_turn_reasoning_record(&DiskReasoningRecord {
-            schema_version: 2,
             provider: provider.to_string(),
             key: key.to_string(),
             created_at_unix_ms: system_time_millis(created_at),
@@ -205,15 +203,16 @@ impl SqliteStore {
     pub fn write_turn_reasoning_record(&self, record: &DiskReasoningRecord) -> io::Result<()> {
         self.conn
             .execute(
-                "INSERT INTO turn_reasoning (provider, key, created_at_ms, last_used_at_ms, bytes, value)
+                "INSERT INTO turn_reasoning (key, provider, created_at_ms, last_used_at_ms, bytes, value)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(provider, key) DO UPDATE SET
+                 ON CONFLICT(key) DO UPDATE SET
+                   provider = excluded.provider,
                    last_used_at_ms = excluded.last_used_at_ms,
                    bytes = excluded.bytes,
                    value = excluded.value",
                 params![
-                    record.provider,
                     record.key,
+                    record.provider,
                     record.created_at_unix_ms as i64,
                     record.last_used_at_unix_ms as i64,
                     record.bytes as i64,
@@ -224,41 +223,36 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub fn read_turn_reasoning(&self, provider: &str, key: u64) -> Option<DiskReasoningRecord> {
-        self.read_reasoning_row("turn_reasoning", provider, &key.to_string())
+    pub fn read_turn_reasoning(&self, key: u64) -> Option<DiskReasoningRecord> {
+        self.read_reasoning_row("turn_reasoning", &key.to_string())
     }
 
     pub fn load_turn_reasoning(&self) -> Vec<DiskReasoningRecord> {
         self.load_reasoning_rows("turn_reasoning")
     }
 
-    pub fn remove_turn_reasoning(&self, provider: &str, key: u64) {
+    pub fn remove_turn_reasoning(&self, key: u64) {
         if let Err(e) = self.conn.execute(
-            "DELETE FROM turn_reasoning WHERE provider = ?1 AND key = ?2",
-            params![provider, key.to_string()],
+            "DELETE FROM turn_reasoning WHERE key = ?1",
+            params![key.to_string()],
         ) {
-            warn!("failed to delete sqlite turn reasoning {provider}/{key}: {e}");
+            warn!("failed to delete sqlite turn reasoning {key}: {e}");
         }
     }
 
-    fn read_reasoning_row(
-        &self,
-        table: &str,
-        provider: &str,
-        key: &str,
-    ) -> Option<DiskReasoningRecord> {
+    fn read_reasoning_row(&self, table: &str, key: &str) -> Option<DiskReasoningRecord> {
         let sql = format!(
-            "SELECT provider, key, created_at_ms, last_used_at_ms, bytes, value FROM {table} WHERE provider = ?1 AND key = ?2"
+            "SELECT key, provider, created_at_ms, last_used_at_ms, bytes, value FROM {table} WHERE key = ?1"
         );
         let mut stmt = self.conn.prepare(&sql).ok()?;
-        let mut rows = stmt.query(params![provider, key]).ok()?;
+        let mut rows = stmt.query(params![key]).ok()?;
         let row = rows.next().ok()??;
         row_to_reasoning_record(row).ok()
     }
 
     fn load_reasoning_rows(&self, table: &str) -> Vec<DiskReasoningRecord> {
         let sql =
-            format!("SELECT provider, key, created_at_ms, last_used_at_ms, bytes, value FROM {table}");
+            format!("SELECT key, provider, created_at_ms, last_used_at_ms, bytes, value FROM {table}");
         let mut stmt = match self.conn.prepare(&sql) {
             Ok(stmt) => stmt,
             Err(e) => {
@@ -283,9 +277,8 @@ fn row_to_session_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<DiskSessio
     let messages_json: String = row.get(5)?;
     let messages: Vec<ChatMessage> = serde_json::from_str(&messages_json).unwrap_or_default();
     Ok(DiskSessionRecord {
-        schema_version: 2,
-        provider: row.get(0)?,
-        response_id: row.get(1)?,
+        response_id: row.get(0)?,
+        provider: row.get(1)?,
         created_at_unix_ms: row.get::<_, i64>(2)? as u128,
         last_used_at_unix_ms: row.get::<_, i64>(3)? as u128,
         bytes: row.get::<_, i64>(4)? as usize,
@@ -295,9 +288,8 @@ fn row_to_session_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<DiskSessio
 
 fn row_to_reasoning_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<DiskReasoningRecord> {
     Ok(DiskReasoningRecord {
-        schema_version: 2,
-        provider: row.get(0)?,
-        key: row.get(1)?,
+        key: row.get(0)?,
+        provider: row.get(1)?,
         created_at_unix_ms: row.get::<_, i64>(2)? as u128,
         last_used_at_unix_ms: row.get::<_, i64>(3)? as u128,
         bytes: row.get::<_, i64>(4)? as usize,
@@ -305,127 +297,45 @@ fn row_to_reasoning_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<DiskReas
     })
 }
 
-fn migrate_schema(conn: &Connection) -> io::Result<()> {
-    if table_exists(conn, "sessions")? && !column_exists(conn, "sessions", "provider")? {
-        migrate_sessions_table(conn)?;
-        migrate_reasoning_table(conn, "reasoning")?;
-        migrate_reasoning_table(conn, "turn_reasoning")?;
-    } else {
-        conn.execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS sessions (
-                provider TEXT NOT NULL DEFAULT 'default',
-                response_id TEXT NOT NULL,
-                created_at_ms INTEGER NOT NULL,
-                last_used_at_ms INTEGER NOT NULL,
-                bytes INTEGER NOT NULL,
-                messages_json TEXT NOT NULL,
-                PRIMARY KEY (provider, response_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS reasoning (
-                provider TEXT NOT NULL DEFAULT 'default',
-                key TEXT NOT NULL,
-                created_at_ms INTEGER NOT NULL,
-                last_used_at_ms INTEGER NOT NULL,
-                bytes INTEGER NOT NULL,
-                value TEXT NOT NULL,
-                PRIMARY KEY (provider, key)
-            );
-
-            CREATE TABLE IF NOT EXISTS turn_reasoning (
-                provider TEXT NOT NULL DEFAULT 'default',
-                key TEXT NOT NULL,
-                created_at_ms INTEGER NOT NULL,
-                last_used_at_ms INTEGER NOT NULL,
-                bytes INTEGER NOT NULL,
-                value TEXT NOT NULL,
-                PRIMARY KEY (provider, key)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_sessions_provider_last_used
-                ON sessions(provider, last_used_at_ms);
-            CREATE INDEX IF NOT EXISTS idx_reasoning_provider_last_used
-                ON reasoning(provider, last_used_at_ms);
-            CREATE INDEX IF NOT EXISTS idx_turn_reasoning_provider_last_used
-                ON turn_reasoning(provider, last_used_at_ms);
-            ",
-        )
-        .map_err(io::Error::other)?;
-    }
-    Ok(())
-}
-
-fn migrate_sessions_table(conn: &Connection) -> io::Result<()> {
+fn init_schema(conn: &Connection) -> io::Result<()> {
     conn.execute_batch(&format!(
         "
-        CREATE TABLE sessions_v2 (
-            provider TEXT NOT NULL DEFAULT 'default',
-            response_id TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS sessions (
+            response_id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL DEFAULT '{DEFAULT_PROVIDER}',
             created_at_ms INTEGER NOT NULL,
             last_used_at_ms INTEGER NOT NULL,
             bytes INTEGER NOT NULL,
-            messages_json TEXT NOT NULL,
-            PRIMARY KEY (provider, response_id)
+            messages_json TEXT NOT NULL
         );
-        INSERT INTO sessions_v2 (provider, response_id, created_at_ms, last_used_at_ms, bytes, messages_json)
-            SELECT '{DEFAULT_PROVIDER}', response_id, created_at_ms, last_used_at_ms, bytes, messages_json FROM sessions;
-        DROP TABLE sessions;
-        ALTER TABLE sessions_v2 RENAME TO sessions;
-        CREATE INDEX IF NOT EXISTS idx_sessions_provider_last_used ON sessions(provider, last_used_at_ms);
+
+        CREATE TABLE IF NOT EXISTS reasoning (
+            key TEXT PRIMARY KEY,
+            provider TEXT NOT NULL DEFAULT '{DEFAULT_PROVIDER}',
+            created_at_ms INTEGER NOT NULL,
+            last_used_at_ms INTEGER NOT NULL,
+            bytes INTEGER NOT NULL,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS turn_reasoning (
+            key TEXT PRIMARY KEY,
+            provider TEXT NOT NULL DEFAULT '{DEFAULT_PROVIDER}',
+            created_at_ms INTEGER NOT NULL,
+            last_used_at_ms INTEGER NOT NULL,
+            bytes INTEGER NOT NULL,
+            value TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sessions_provider ON sessions(provider);
+        CREATE INDEX IF NOT EXISTS idx_sessions_last_used ON sessions(last_used_at_ms);
+        CREATE INDEX IF NOT EXISTS idx_reasoning_provider ON reasoning(provider);
+        CREATE INDEX IF NOT EXISTS idx_reasoning_last_used ON reasoning(last_used_at_ms);
+        CREATE INDEX IF NOT EXISTS idx_turn_reasoning_provider ON turn_reasoning(provider);
+        CREATE INDEX IF NOT EXISTS idx_turn_reasoning_last_used ON turn_reasoning(last_used_at_ms);
         "
     ))
     .map_err(io::Error::other)
-}
-
-fn migrate_reasoning_table(conn: &Connection, table: &str) -> io::Result<()> {
-    if !table_exists(conn, table)? {
-        return Ok(());
-    }
-    let sql = format!(
-        "
-        CREATE TABLE {table}_v2 (
-            provider TEXT NOT NULL DEFAULT 'default',
-            key TEXT NOT NULL,
-            created_at_ms INTEGER NOT NULL,
-            last_used_at_ms INTEGER NOT NULL,
-            bytes INTEGER NOT NULL,
-            value TEXT NOT NULL,
-            PRIMARY KEY (provider, key)
-        );
-        INSERT INTO {table}_v2 (provider, key, created_at_ms, last_used_at_ms, bytes, value)
-            SELECT '{DEFAULT_PROVIDER}', key, created_at_ms, last_used_at_ms, bytes, value FROM {table};
-        DROP TABLE {table};
-        ALTER TABLE {table}_v2 RENAME TO {table};
-        CREATE INDEX IF NOT EXISTS idx_{table}_provider_last_used ON {table}(provider, last_used_at_ms);
-        ",
-        table = table,
-        DEFAULT_PROVIDER = DEFAULT_PROVIDER,
-    );
-    conn.execute_batch(&sql).map_err(io::Error::other)
-}
-
-fn table_exists(conn: &Connection, table: &str) -> io::Result<bool> {
-    let mut stmt = conn
-        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")
-        .map_err(io::Error::other)?;
-    Ok(stmt
-        .exists(params![table])
-        .map_err(io::Error::other)?)
-}
-
-fn column_exists(conn: &Connection, table: &str, column: &str) -> io::Result<bool> {
-    let sql = format!("PRAGMA table_info({table})");
-    let mut stmt = conn.prepare(&sql).map_err(io::Error::other)?;
-    let rows = stmt
-        .query_map([], |row| row.get::<_, String>(1))
-        .map_err(io::Error::other)?;
-    for name in rows.flatten() {
-        if name == column {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn system_time_millis(time: SystemTime) -> u128 {
@@ -482,82 +392,38 @@ mod tests {
             .write_turn_reasoning("kimi", "42", now, now, 5, "turn-think")
             .expect("write turn reasoning");
 
-        let session = store
-            .read_session("deepseek", "resp_1")
-            .expect("read session");
+        let session = store.read_session("resp_1").expect("read session");
         assert_eq!(session.messages.len(), 2);
         assert_eq!(store.load_sessions().len(), 1);
 
-        let reasoning = store
-            .read_reasoning("kimi", "call_1")
-            .expect("read reasoning");
+        let reasoning = store.read_reasoning("call_1").expect("read reasoning");
         assert_eq!(reasoning.value, "thinking");
 
-        let turn = store.read_turn_reasoning("kimi", 42).expect("read turn");
+        let turn = store.read_turn_reasoning(42).expect("read turn");
         assert_eq!(turn.value, "turn-think");
 
-        store.remove_session("deepseek", "resp_1");
-        store.remove_reasoning("kimi", "call_1");
-        store.remove_turn_reasoning("kimi", 42);
-        assert!(store.read_session("deepseek", "resp_1").is_none());
+        store.remove_session("resp_1");
+        store.remove_reasoning("call_1");
+        store.remove_turn_reasoning(42);
+        assert!(store.read_session("resp_1").is_none());
     }
 
     #[test]
-    fn sqlite_isolates_providers() {
-        let path = temp_db("isolate");
+    fn sqlite_session_keyed_by_response_id_with_provider_index() {
+        let path = temp_db("shared");
         let store = SqliteStore::open(&path).expect("open sqlite");
         let now = SystemTime::now();
         store
-            .write_session("deepseek", "resp_1", now, now, 4, &[msg("user", "ds")])
+            .write_session("deepseek", "resp_1", now, now, 4, &[msg("user", "first")])
             .unwrap();
+        let later = now + Duration::from_millis(10);
         store
-            .write_session("kimi", "resp_1", now, now, 4, &[msg("user", "kimi")])
+            .write_session("kimi", "resp_1", later, later, 4, &[msg("user", "second")])
             .unwrap();
 
-        assert_eq!(
-            store
-                .read_session("deepseek", "resp_1")
-                .unwrap()
-                .messages[0]
-                .text_content(),
-            "ds"
-        );
-        assert_eq!(
-            store
-                .read_session("kimi", "resp_1")
-                .unwrap()
-                .messages[0]
-                .text_content(),
-            "kimi"
-        );
-    }
-
-    #[test]
-    fn sqlite_migrates_legacy_schema() {
-        let path = temp_db("legacy");
-        {
-            let conn = Connection::open(&path).unwrap();
-            conn.execute_batch(
-                "
-                CREATE TABLE sessions (
-                    response_id TEXT PRIMARY KEY,
-                    created_at_ms INTEGER NOT NULL,
-                    last_used_at_ms INTEGER NOT NULL,
-                    bytes INTEGER NOT NULL,
-                    messages_json TEXT NOT NULL
-                );
-                INSERT INTO sessions VALUES ('resp_old', 1, 2, 3, '[]');
-                ",
-            )
-            .unwrap();
-        }
-
-        let store = SqliteStore::open(&path).expect("open migrated");
-        let record = store
-            .read_session(crate::session_sqlite::DEFAULT_PROVIDER, "resp_old")
-            .expect("read");
-        assert_eq!(record.response_id, "resp_old");
-        assert_eq!(record.provider, crate::session_sqlite::DEFAULT_PROVIDER);
+        let session = store.read_session("resp_1").unwrap();
+        assert_eq!(session.messages[0].text_content(), "second");
+        assert_eq!(session.provider, "kimi");
     }
 
     #[test]
@@ -572,10 +438,7 @@ mod tests {
         }
 
         let store = SqliteStore::open(&path).expect("reopen");
-        let session = store
-            .read_session("deepseek", "resp_2")
-            .expect("read");
+        let session = store.read_session("resp_2").expect("read");
         assert_eq!(session.messages[0].text_content(), "persist");
-        std::thread::sleep(Duration::from_millis(1));
     }
 }
