@@ -1,10 +1,11 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Instant;
 
 use axum::{
     Json,
     extract::{Path, Request, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use reqwest::Url;
@@ -12,13 +13,31 @@ use serde_json::json;
 use tracing::{debug, error, info, warn};
 
 use crate::cache::ResponseCache;
-use crate::provider::ProviderKind;
+use crate::provider::{ProviderKind, apply_upstream_headers};
 use crate::state::{AppState, ProviderRuntime};
 use crate::stream::{self, StreamArgs};
 use crate::translate;
 use crate::types::*;
 
 const DEBUG_NAME_LIMIT: usize = 80;
+
+/// Read `Authorization: Bearer …` from an incoming Codex request.
+fn bearer_token_from_headers(headers: &HeaderMap) -> Option<String> {
+    let auth = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
+    let token = auth
+        .strip_prefix("Bearer ")
+        .or_else(|| auth.strip_prefix("bearer "))?
+        .trim();
+    (!token.is_empty()).then(|| token.to_string())
+}
+
+/// Bearer token from Codex (`env_key` → `Authorization: Bearer …`).
+fn upstream_api_key(headers: &HeaderMap) -> Option<Arc<String>> {
+    bearer_token_from_headers(headers).map(Arc::new)
+}
 
 pub fn join_base(url: &Url) -> String {
     let s = url.as_str();
@@ -56,23 +75,23 @@ async fn api_root_for_provider(state: &AppState, provider: &str) -> Response {
 pub async fn handle_models(
     State(state): State<AppState>,
     provider: Option<Path<String>>,
+    headers: HeaderMap,
 ) -> Response {
     let slug = provider
         .map(|p| p.0)
         .unwrap_or_else(|| state.default_provider.as_str().to_string());
-    handle_models_inner(state, &slug).await
+    handle_models_inner(state, &slug, &headers).await
 }
 
-async fn handle_models_inner(state: AppState, provider: &str) -> Response {
+async fn handle_models_inner(state: AppState, provider: &str, headers: &HeaderMap) -> Response {
     let Some(runtime) = state.provider(provider) else {
         return (StatusCode::NOT_FOUND, format!("unknown provider: {provider}")).into_response();
     };
     info!(provider, "GET /{provider}/v1/models");
+    let kind = ProviderKind::from_route(provider).unwrap_or(ProviderKind::Custom);
+    let api_key = upstream_api_key(headers).unwrap_or_default();
     let url = format!("{}models", join_base(&runtime.upstream));
-    let mut builder = state.client.get(&url);
-    if !runtime.api_key.is_empty() {
-        builder = builder.bearer_auth(runtime.api_key.as_str());
-    }
+    let builder = apply_upstream_headers(state.client.get(&url), kind, api_key.as_str());
 
     let upstream_body: Option<serde_json::Value> = match builder.send().await {
         Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
@@ -104,8 +123,14 @@ async fn handle_models_inner(state: AppState, provider: &str) -> Response {
         .filter_map(|item| item.get("id").and_then(|v| v.as_str()).map(String::from))
         .collect();
 
-    let kind = ProviderKind::from_route(provider).unwrap_or(ProviderKind::Custom);
-    for known in kind.known_models() {
+    list.retain(|item| {
+        item.get("id")
+            .and_then(|v| v.as_str())
+            .is_some_and(|id| kind.model_matches_provider(id))
+    });
+    seen.retain(|id| kind.model_matches_provider(id));
+
+    for known in kind.known_models_for_upstream(runtime.upstream.as_str()) {
         if seen.insert((*known).to_string()) {
             list.push(json!({
                 "id": known,
@@ -114,7 +139,7 @@ async fn handle_models_inner(state: AppState, provider: &str) -> Response {
             }));
         }
     }
-    let default_model = runtime.default_model.as_str();
+    let default_model = kind.default_model();
     if seen.insert(default_model.to_string()) {
         list.push(json!({
             "id": default_model,
@@ -139,17 +164,19 @@ pub async fn handle_fallback(req: Request) -> Response {
 pub async fn handle_responses(
     State(state): State<AppState>,
     provider: Option<Path<String>>,
+    headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
     let slug = provider
         .map(|p| p.0)
         .unwrap_or_else(|| state.default_provider.as_str().to_string());
-    handle_responses_for_provider(state, &slug, body).await
+    handle_responses_for_provider(state, &slug, &headers, body).await
 }
 
 async fn handle_responses_for_provider(
     state: AppState,
     provider: &str,
+    headers: &HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
     let Some(runtime) = state.provider(provider) else {
@@ -191,13 +218,14 @@ async fn handle_responses_for_provider(
         summarize_debug_names(response_tool_debug_names(&req.tools))
     );
 
-    handle_responses_inner(state, provider, runtime, req, started).await
+    handle_responses_inner(state, provider, runtime, headers, req, started).await
 }
 
 async fn handle_responses_inner(
     state: AppState,
     provider: &str,
     runtime: ProviderRuntime,
+    headers: &HeaderMap,
     req: ResponsesRequest,
     started: Instant,
 ) -> Response {
@@ -214,11 +242,13 @@ async fn handle_responses_inner(
 
     let model = req.model.clone();
     let namespace_tools = translate::namespace_tool_map(&req.tools);
+    let kind = ProviderKind::from_route(provider).unwrap_or(ProviderKind::Custom);
     let mut chat_req = translate::to_chat_request(
         &req,
         history,
         &state.sessions,
-        runtime.default_model.as_str(),
+        kind,
+        kind.default_model(),
         runtime.model_map.as_deref(),
         runtime.default_max_tokens,
         runtime.default_temperature,
@@ -238,6 +268,13 @@ async fn handle_responses_inner(
         summarize_debug_names(chat_tool_debug_names(&chat_req.tools))
     );
     let url = format!("{}chat/completions", join_base(&runtime.upstream));
+    let Some(api_key) = upstream_api_key(headers) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "missing Authorization: Bearer token (set Codex env_key in shell)",
+        )
+            .into_response();
+    };
 
     if req.stream {
         let response_id = state.sessions.new_id();
@@ -246,7 +283,7 @@ async fn handle_responses_inner(
         stream::translate_stream(StreamArgs {
             client: state.client,
             url,
-            api_key: runtime.api_key,
+            api_key,
             chat_req,
             upstream_request: state.upstream_request,
             response_id,
@@ -263,7 +300,7 @@ async fn handle_responses_inner(
         handle_blocking(
             state,
             provider,
-            runtime,
+            api_key,
             chat_req,
             url,
             model,
@@ -453,7 +490,7 @@ fn parse_spawn_agent_call(call: &serde_json::Value) -> Option<SpawnAgentCall> {
 async fn handle_blocking(
     state: AppState,
     provider: &str,
-    runtime: ProviderRuntime,
+    api_key: Arc<String>,
     chat_req: ChatRequest,
     url: String,
     model: String,
@@ -483,14 +520,15 @@ async fn handle_blocking(
         }
     }
 
-    let mut builder = state
-        .client
-        .post(&url)
-        .header("Content-Type", "application/json");
-
-    if !runtime.api_key.is_empty() {
-        builder = builder.bearer_auth(runtime.api_key.as_str());
-    }
+    let kind = ProviderKind::from_route(provider).unwrap_or(ProviderKind::Custom);
+    let builder = apply_upstream_headers(
+        state
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json"),
+        kind,
+        api_key.as_str(),
+    );
 
     let upstream_body = match state.upstream_request.request_body(&chat_req) {
         Ok(body) => body,
@@ -619,5 +657,38 @@ async fn handle_blocking(
                 Json(resp).into_response()
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn bearer_token_from_authorization_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer sk-kimi-from-codex"),
+        );
+        assert_eq!(
+            bearer_token_from_headers(&headers).as_deref(),
+            Some("sk-kimi-from-codex")
+        );
+    }
+
+    #[test]
+    fn upstream_api_key_reads_authorization_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer sk-kimi-from-codex"),
+        );
+        assert_eq!(
+            upstream_api_key(&headers).as_deref().map(|k| k.as_str()),
+            Some("sk-kimi-from-codex")
+        );
+        assert!(upstream_api_key(&HeaderMap::new()).is_none());
     }
 }

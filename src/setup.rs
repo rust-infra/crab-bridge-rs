@@ -142,21 +142,15 @@ pub async fn run_setup(opts: SetupOptions) -> Result<SetupResult> {
                 .multi_provider_slugs
                 .as_ref()
                 .context("multi_provider_slugs required for multi bridge config")?;
-            let entries = config::provider_bridge_entries(slugs, opts.api_key.clone());
-            let entry_refs: Vec<(&str, &str, &str, Option<&str>)> = entries
-                .iter()
-                .map(|(slug, url, model, key)| {
-                    (slug.as_str(), url.as_str(), model.as_str(), key.as_deref())
-                })
-                .collect();
+            let slug_refs: Vec<&str> = slugs.iter().map(String::as_str).collect();
             let default_provider = slugs
                 .last()
-                .map(|s| s.as_str())
+                .map(String::as_str)
                 .unwrap_or_else(|| opts.provider_slug.as_str());
             config::write_multi_bridge_config(
                 &path,
                 default_provider,
-                &entry_refs,
+                &slug_refs,
                 &opts.bind_addr.to_string(),
             )?;
             bridge_config_created = true;
@@ -171,9 +165,6 @@ pub async fn run_setup(opts: SetupOptions) -> Result<SetupResult> {
             config::write_bridge_config(
                 &path,
                 opts.provider,
-                &base_url,
-                &model,
-                opts.api_key.as_deref(),
                 &opts.bind_addr.to_string(),
             )?;
             bridge_config_created = true;
@@ -648,46 +639,6 @@ fn check_bridge_config_file(checks: &mut Vec<ConfigCheck>, path: &Path) {
                 CheckStatus::Ok,
                 format!("{} ({summary})", path.display()),
             );
-            let has_key = if !cfg.providers.is_empty() {
-                let missing: Vec<_> = cfg
-                    .providers
-                    .iter()
-                    .filter(|(_, section)| {
-                        section
-                            .api_key
-                            .as_ref()
-                            .is_none_or(|k| k.is_empty())
-                    })
-                    .map(|(slug, _)| slug.as_str())
-                    .collect();
-                if missing.is_empty() {
-                    true
-                } else {
-                    push_check(
-                        checks,
-                        "bridge config api_key",
-                        CheckStatus::Warn,
-                        format!(
-                            "missing api_key for: {} — set keys under [providers.*]",
-                            missing.join(", ")
-                        ),
-                    );
-                    false
-                }
-            } else {
-                cfg.upstream
-                    .as_ref()
-                    .and_then(|u| u.api_key.as_ref())
-                    .is_some_and(|k| !k.is_empty())
-            };
-            if !has_key && cfg.providers.is_empty() {
-                push_check(
-                    checks,
-                    "bridge config api_key",
-                    CheckStatus::Warn,
-                    "upstream.api_key is empty — set it in the TOML or via env".into(),
-                );
-            }
         }
         Err(e) => push_check(
             checks,
@@ -927,20 +878,11 @@ trust_level = "trusted"
     fn write_bridge_config_for_kimi() {
         let dir = temp_dir("toml");
         let path = dir.join("crabbridge.toml");
-        config::write_bridge_config(
-            &path,
-            ProviderKind::Kimi,
-            "https://api.kimi.com/coding/v1",
-            "kimi-for-coding",
-            Some("sk-test"),
-            "127.0.0.1:11435",
-        )
-        .unwrap();
+        config::write_bridge_config(&path, ProviderKind::Kimi, "127.0.0.1:11435").unwrap();
         let body = fs::read_to_string(&path).unwrap();
         assert!(body.contains("default_provider = \"kimi\""));
         assert!(body.contains("[providers.kimi]"));
-        assert!(body.contains("api_key = \"sk-test\""));
-        assert!(body.contains("model = \"kimi-for-coding\""));
+        assert!(!body.contains("api_key"));
     }
 
     #[test]

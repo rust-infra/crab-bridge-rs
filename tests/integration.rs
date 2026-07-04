@@ -11,6 +11,8 @@ use reqwest::Client;
 use serde_json::json;
 use tokio::net::TcpListener;
 
+const TEST_BEARER: &str = "test-key";
+
 async fn spawn_test_server(
     mock_base_url: &str,
     provider_slug: &str,
@@ -27,8 +29,6 @@ async fn spawn_test_server(
             upstream: mock_base_url
                 .parse()
                 .expect("mock upstream url must be valid"),
-            api_key: Arc::new("test-key".to_string()),
-            default_model: Arc::new("deepseek-chat".to_string()),
             default_max_tokens: None,
             default_temperature: None,
             model_map: None,
@@ -92,6 +92,7 @@ async fn non_stream_response_is_translated() {
 
     let response = Client::new()
         .post(format!("http://{addr}/deepseek/v1/responses"))
+        .header("Authorization", format!("Bearer {TEST_BEARER}"))
         .json(&json!({
             "model": "gpt-5.4",
             "input": "hello",
@@ -112,10 +113,30 @@ async fn non_stream_response_is_translated() {
 }
 
 #[tokio::test]
+async fn responses_without_authorization_returns_401() {
+    let mock = mockito::Server::new_async().await;
+    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url()), "deepseek").await;
+
+    let response = Client::new()
+        .post(format!("http://{addr}/deepseek/v1/responses"))
+        .json(&json!({
+            "model": "gpt-5.4",
+            "input": "hello",
+            "stream": false
+        }))
+        .send()
+        .await
+        .expect("send");
+
+    assert_eq!(response.status(), 401);
+}
+
+#[tokio::test]
 async fn legacy_v1_route_still_works() {
     let mut mock = mockito::Server::new_async().await;
     let _mock = mock
         .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
         .with_status(200)
         .with_header("content-type", "application/json")
         .with_body(r#"{"choices":[{"message":{"role":"assistant","content":"legacy"}}]}"#)
@@ -126,6 +147,7 @@ async fn legacy_v1_route_still_works() {
 
     let response = Client::new()
         .post(format!("http://{addr}/v1/responses"))
+        .header("Authorization", format!("Bearer {TEST_BEARER}"))
         .json(&json!({
             "model": "gpt-5.4",
             "input": "hello",
@@ -158,6 +180,7 @@ async fn stream_response_is_translated() {
 
     let body = Client::new()
         .post(format!("http://{addr}/deepseek/v1/responses"))
+        .header("Authorization", format!("Bearer {TEST_BEARER}"))
         .json(&json!({
             "model": "gpt-5.4",
             "input": "hello",
@@ -190,6 +213,7 @@ async fn stream_without_done_completes_when_content_received() {
 
     let body = Client::new()
         .post(format!("http://{addr}/deepseek/v1/responses"))
+        .header("Authorization", format!("Bearer {TEST_BEARER}"))
         .json(&json!({
             "model": "gpt-5.4",
             "input": "hello",
@@ -222,6 +246,7 @@ async fn models_endpoint_proxies_upstream() {
 
     let response: serde_json::Value = Client::new()
         .get(format!("http://{addr}/deepseek/v1/models"))
+        .header("Authorization", format!("Bearer {TEST_BEARER}"))
         .send()
         .await
         .expect("send")
@@ -231,4 +256,73 @@ async fn models_endpoint_proxies_upstream() {
 
     assert_eq!(response["data"][0]["id"], "deepseek-chat");
     assert_eq!(response["models"][0]["id"], "deepseek-chat");
+}
+
+#[tokio::test]
+async fn kimi_upstream_requests_include_user_agent() {
+    use crab_bridge_rs::provider::KIMI_UPSTREAM_USER_AGENT;
+
+    let mut mock = mockito::Server::new_async().await;
+    let _mock = mock
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .match_header("user-agent", KIMI_UPSTREAM_USER_AGENT)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"choices":[{"message":{"role":"assistant","content":"kimi ok"}}]}"#)
+        .create_async()
+        .await;
+
+    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url()), "kimi").await;
+
+    let response = Client::new()
+        .post(format!("http://{addr}/kimi/v1/responses"))
+        .header("Authorization", format!("Bearer {TEST_BEARER}"))
+        .json(&json!({
+            "model": "kimi-for-coding",
+            "input": "hello",
+            "stream": false
+        }))
+        .send()
+        .await
+        .expect("send")
+        .text()
+        .await
+        .expect("body");
+
+    let body: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(body["output"][0]["content"][0]["text"], "kimi ok");
+}
+
+#[tokio::test]
+async fn client_authorization_header_is_forwarded_to_upstream() {
+    let mut mock = mockito::Server::new_async().await;
+    let _mock = mock
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer codex-client-key")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"choices":[{"message":{"role":"assistant","content":"forwarded"}}]}"#)
+        .create_async()
+        .await;
+
+    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url()), "deepseek").await;
+
+    let response = Client::new()
+        .post(format!("http://{addr}/deepseek/v1/responses"))
+        .header("Authorization", "Bearer codex-client-key")
+        .json(&json!({
+            "model": "gpt-5.4",
+            "input": "hello",
+            "stream": false
+        }))
+        .send()
+        .await
+        .expect("send")
+        .text()
+        .await
+        .expect("body");
+
+    let body: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(body["output"][0]["content"][0]["text"], "forwarded");
 }

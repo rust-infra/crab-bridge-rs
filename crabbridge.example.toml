@@ -1,18 +1,13 @@
 # CrabBridge configuration
 # Copy to crabbridge.toml (cwd) or ~/.config/crabbridge/config.toml
-# Priority: CLI flags > environment variables > this file > defaults
+#
+# API keys and models come from Codex requests (env_key + request body).
+# Upstream URLs are derived from provider route slugs (/deepseek/v1, /kimi/v1).
 
 default_provider = "deepseek"
 
 [providers.deepseek]
-api_key = "sk-your-deepseek-key"
-base_url = "https://api.deepseek.com/v1"
-model = "deepseek-v4-pro"
-
 [providers.kimi]
-api_key = "sk-your-kimi-code-key"
-base_url = "https://api.kimi.com/coding/v1"
-model = "kimi-for-coding"
 
 [server]
 bind_addr = "127.0.0.1:11435"

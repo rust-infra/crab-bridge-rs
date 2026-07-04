@@ -20,8 +20,8 @@ use crab_bridge_rs::app::build_router;
 use crab_bridge_rs::cache::ResponseCache;
 use crab_bridge_rs::codex_config::print_codex_config;
 use crab_bridge_rs::config::{
-    ServeOverrides, config_path_from_args, load_config_file, load_config_into_env,
-    resolve_api_key, resolve_config_path, resolve_serve_providers, validate_upstream_url,
+    default_config_write_path, load_config_file, load_config_into_env, resolve_api_key,
+    resolve_config_path, resolve_serve_providers, validate_upstream_url,
 };
 use crab_bridge_rs::opts::{Cli, Commands, ServeArgs, SetupArgs};
 use crab_bridge_rs::prompt::ResponsesSseParser;
@@ -31,13 +31,12 @@ use crab_bridge_rs::state::{AppState, ProviderRuntime};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    load_config_into_env(config_path_from_args())?;
+    let cli = Cli::parse();
+    load_config_into_env(cli.config.clone())?;
     bootstrap_upstream_env();
 
-    let cli = Cli::parse();
-
     match cli.command {
-        Commands::Serve(serve) => run_serve(serve).await,
+        Commands::Serve(serve) => run_serve(serve, cli.config.clone()).await,
         Commands::Prompt {
             message,
             stream,
@@ -65,15 +64,12 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        Commands::Setup(args) => run_setup(args).await,
+        Commands::Setup(args) => run_setup(args, cli.config).await,
     }
 }
 
-async fn run_serve(serve: ServeArgs) -> Result<()> {
+async fn run_serve(serve: ServeArgs, config_path: Option<std::path::PathBuf>) -> Result<()> {
     let ServeArgs {
-        api_key,
-        base_url,
-        model,
         bind_addr,
         max_tokens,
         temperature,
@@ -92,30 +88,23 @@ async fn run_serve(serve: ServeArgs) -> Result<()> {
         .with_env_filter(EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
 
-    let cfg = resolve_config_path(config_path_from_args())
-        .and_then(|path| load_config_file(&path).ok());
-    let resolved = resolve_serve_providers(
-        cfg.as_ref(),
-        &ServeOverrides {
-            api_key: (!api_key.is_empty()).then_some(api_key),
-            base_url,
-            model,
-        },
-    )?;
+    let resolved_path = resolve_config_path(config_path);
+    let cfg = resolved_path
+        .as_ref()
+        .and_then(|path| load_config_file(path).ok());
+    if let Some(path) = &resolved_path {
+        info!(config = %path.display(), "using bridge config");
+    }
+    let resolved = resolve_serve_providers(cfg.as_ref())?;
 
     let mut providers = HashMap::new();
     for (slug, entry) in &resolved.providers {
-        if entry.api_key.is_empty() {
-            tracing::warn!(provider = %slug, "skipping provider with no API key");
-            continue;
-        }
-        let upstream = validate_upstream_url(&entry.base_url)?;
+        let kind = ProviderKind::from_route(slug).unwrap_or(ProviderKind::Custom);
+        let upstream = validate_upstream_url(kind.default_base_url())?;
         providers.insert(
             slug.clone(),
             ProviderRuntime {
                 upstream,
-                api_key: Arc::new(entry.api_key.clone()),
-                default_model: Arc::new(entry.model.clone()),
                 default_max_tokens: max_tokens,
                 default_temperature: temperature,
                 model_map: entry.model_map.clone(),
@@ -124,7 +113,7 @@ async fn run_serve(serve: ServeArgs) -> Result<()> {
     }
 
     if providers.is_empty() {
-        bail!("no providers with API keys configured");
+        bail!("no providers configured");
     }
 
     let default_provider = if providers.contains_key(&resolved.default_provider) {
@@ -228,6 +217,13 @@ async fn run_prompt(
     model: String,
     provider: String,
 ) -> Result<()> {
+    let provider_kind = ProviderKind::parse(&provider);
+    let api_key = resolve_api_key(provider_kind.route_slug(), provider_kind, None)
+        .context(format!(
+            "no API key in environment — set {}",
+            provider_kind.codex_env_key()
+        ))?;
+
     let request = serde_json::json!({
         "model": model,
         "input": message,
@@ -240,6 +236,7 @@ async fn run_prompt(
     if stream {
         let response = client
             .post(&url)
+            .bearer_auth(api_key)
             .json(&request)
             .send()
             .await
@@ -260,6 +257,7 @@ async fn run_prompt(
     } else {
         let response: serde_json::Value = client
             .post(&url)
+            .bearer_auth(api_key)
             .json(&request)
             .send()
             .await
@@ -353,12 +351,13 @@ async fn run_setup(
         bind_addr,
         codex_only,
         force_config,
-        config,
         docker,
         all_providers,
         providers,
     }: SetupArgs,
+    config: Option<std::path::PathBuf>,
 ) -> Result<()> {
+    let config = default_config_write_path(config);
     let slugs = if docker && providers.is_none() && !all_providers && config.is_file() {
         load_config_file(&config)
             .ok()

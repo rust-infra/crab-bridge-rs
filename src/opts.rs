@@ -11,6 +11,10 @@ use crate::session::{DEFAULT_MAX_SESSIONS, DEFAULT_SESSION_TTL};
     about = "Bridge Codex CLI (Responses API) to DeepSeek / Kimi Chat Completions"
 )]
 pub struct Cli {
+    /// Path to crabbridge.toml (also `CRABRIDGE_CONFIG`)
+    #[arg(short = 'c', long, global = true, env = "CRABRIDGE_CONFIG", value_name = "FILE")]
+    pub config: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -97,9 +101,6 @@ pub struct SetupArgs {
     /// Overwrite an existing bridge config.toml
     #[arg(long)]
     pub force_config: bool,
-    /// Path for the bridge TOML config file
-    #[arg(short = 'c', long, default_value = "crabbridge.toml")]
-    pub config: PathBuf,
     /// Check current Codex + bridge configuration (read-only, no writes)
     #[arg(long)]
     pub docker: bool,
@@ -118,17 +119,6 @@ pub struct SetupArgs {
 
 #[derive(Parser, Debug)]
 pub struct ServeArgs {
-    /// Upstream API key. Also accepts DEEPSEEK_API_KEY / MOONSHOT_API_KEY / KIMI_API_KEY.
-    #[arg(long, env = "UPSTREAM_API_KEY", default_value = "")]
-    pub api_key: String,
-    /// Upstream Chat Completions base URL (overrides default provider only).
-    /// DeepSeek: https://api.deepseek.com/v1
-    /// Kimi Code: https://api.kimi.com/coding/v1
-    #[arg(long, env = "UPSTREAM_BASE_URL")]
-    pub base_url: Option<String>,
-    /// Default upstream model for the default provider when Codex sends an unmapped name.
-    #[arg(long, env = "UPSTREAM_MODEL")]
-    pub model: Option<String>,
     #[arg(
         short = 'b',
         long,

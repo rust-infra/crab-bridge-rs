@@ -12,6 +12,7 @@ use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    provider::{ProviderKind, apply_upstream_headers},
     session::SessionStore,
     translate::{NamespaceToolMap, response_function_name_for_responses},
     types::{ChatMessage, ChatRequest, ChatStreamChunk, ChatUsage},
@@ -103,10 +104,12 @@ pub fn translate_stream(
                 "response": { "id": &response_id, "status": "in_progress", "model": &model }
             }).to_string()));
 
-        let mut builder = client.post(&url).header("Content-Type", "application/json");
-        if !api_key.is_empty() {
-            builder = builder.bearer_auth(api_key.as_str());
-        }
+        let kind = ProviderKind::from_route(&provider).unwrap_or(ProviderKind::Custom);
+        let builder = apply_upstream_headers(
+            client.post(&url).header("Content-Type", "application/json"),
+            kind,
+            api_key.as_str(),
+        );
 
         let upstream_body = match upstream_request.request_body(&chat_req) {
             Ok(body) => body,

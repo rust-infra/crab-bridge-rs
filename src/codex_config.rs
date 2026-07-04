@@ -7,7 +7,7 @@ use reqwest::{Client, Url};
 use serde_json::{json, Value};
 
 use crate::handlers::join_base;
-use crate::provider::ProviderKind;
+use crate::provider::{ProviderKind, apply_upstream_headers};
 
 pub struct ModelProps {
     pub context_window: u32,
@@ -114,10 +114,7 @@ pub async fn prepare_model_catalog(
     default_model: &str,
 ) -> Vec<String> {
     let url = format!("{}models", join_base(upstream));
-    let mut builder = client.get(&url);
-    if !api_key.is_empty() {
-        builder = builder.bearer_auth(api_key);
-    }
+    let builder = apply_upstream_headers(client.get(&url), kind, api_key);
 
     let mut models: Vec<String> = match builder.send().await {
         Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
@@ -142,7 +139,9 @@ pub async fn prepare_model_catalog(
         }
     };
 
-    for known in known_models_for(kind, default_model) {
+    models.retain(|m| kind.model_matches_provider(m));
+
+    for known in known_models_for(kind, upstream.as_str(), default_model) {
         if !models.iter().any(|m| m == &known) {
             models.push(known);
         }
@@ -170,9 +169,9 @@ fn preferred_model(models: &[String], kind: ProviderKind, default_model: &str) -
     }
 }
 
-fn known_models_for(kind: ProviderKind, default_model: &str) -> Vec<String> {
+fn known_models_for(kind: ProviderKind, base_url: &str, default_model: &str) -> Vec<String> {
     let mut models: Vec<String> = kind
-        .known_models()
+        .known_models_for_upstream(base_url)
         .iter()
         .map(|m| (*m).to_string())
         .collect();

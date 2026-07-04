@@ -10,8 +10,6 @@ use crate::upstream_request::UpstreamRequestConfig;
 #[derive(Clone)]
 pub struct ProviderRuntime {
     pub upstream: Url,
-    pub api_key: Arc<String>,
-    pub default_model: Arc<String>,
     pub default_max_tokens: Option<u32>,
     pub default_temperature: Option<f32>,
     pub model_map: Option<String>,

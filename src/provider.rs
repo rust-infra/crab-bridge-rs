@@ -2,6 +2,11 @@
 
 use std::env;
 
+use reqwest::RequestBuilder;
+
+/// User-Agent accepted by the Kimi Code API for upstream requests.
+pub const KIMI_UPSTREAM_USER_AGENT: &str = "Claude Code";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderKind {
     DeepSeek,
@@ -146,6 +151,15 @@ impl ProviderKind {
     }
 
     pub fn known_models(self) -> &'static [&'static str] {
+        self.known_models_for_upstream("")
+    }
+
+    /// Provider-specific model IDs for catalog / `/models` fallbacks.
+    ///
+    /// Kimi Code (`api.kimi.com/coding/v1`) exposes `kimi-for-coding` as the stable
+    /// alias; Moonshot Open Platform uses separate `kimi-k2.*` IDs.
+    pub fn known_models_for_upstream(self, base_url: &str) -> &'static [&'static str] {
+        let lower = base_url.to_ascii_lowercase();
         match self {
             Self::DeepSeek => &[
                 "deepseek-chat",
@@ -153,8 +167,37 @@ impl ProviderKind {
                 "deepseek-v4-pro",
                 "deepseek-v4-flash",
             ],
-            Self::Kimi => &["kimi-for-coding"],
+            Self::Kimi if lower.contains("moonshot") && !lower.contains("api.kimi.com/coding") => {
+                &[
+                    "kimi-k2.7-code",
+                    "kimi-k2.7-code-highspeed",
+                    "kimi-k2.6",
+                    "kimi-k2.5",
+                ]
+            }
+            Self::Kimi => &[
+                // Kimi Code Plan — stable alias to latest coding model.
+                "kimi-for-coding",
+                // Some third-party agents (Claude Code, Roo Code) send this ID directly.
+                "kimi-k2.5",
+            ],
             Self::Custom => &[],
+        }
+    }
+
+    /// Whether an upstream model ID belongs to this provider (for pass-through / filtering).
+    pub fn model_matches_provider(self, name: &str) -> bool {
+        let lower = name.to_ascii_lowercase();
+        match self {
+            Self::DeepSeek => lower.contains("deepseek"),
+            Self::Kimi => lower.contains("kimi") || lower.contains("moonshot"),
+            Self::Custom => {
+                lower.contains("deepseek")
+                    || lower.contains("kimi")
+                    || lower.contains("moonshot")
+                    || lower.contains("glm")
+                    || lower.contains("zhipu")
+            }
         }
     }
 
@@ -168,6 +211,14 @@ impl ProviderKind {
                 "KIMI_API_KEY",
                 "MOONSHOT_API_KEY",
             ],
+        }
+    }
+
+    /// Optional User-Agent header required by some upstream APIs (e.g. Kimi Code).
+    pub fn upstream_user_agent(self) -> Option<&'static str> {
+        match self {
+            Self::Kimi => Some(KIMI_UPSTREAM_USER_AGENT),
+            _ => None,
         }
     }
 
@@ -196,6 +247,22 @@ impl ProviderKind {
             ],
         }
     }
+}
+
+/// Attach provider-specific upstream auth and headers to a reqwest request builder.
+pub fn apply_upstream_headers(
+    builder: RequestBuilder,
+    kind: ProviderKind,
+    api_key: &str,
+) -> RequestBuilder {
+    let mut builder = builder;
+    if !api_key.is_empty() {
+        builder = builder.bearer_auth(api_key);
+    }
+    if let Some(ua) = kind.upstream_user_agent() {
+        builder = builder.header(reqwest::header::USER_AGENT, ua);
+    }
+    builder
 }
 
 /// Resolve provider aliases into `UPSTREAM_*` before Clap reads the environment.
@@ -360,6 +427,19 @@ mod tests {
         );
         assert_eq!(ProviderKind::Kimi.default_model(), "kimi-for-coding");
         assert_eq!(ProviderKind::Kimi.codex_env_key(), "KIMI_API_KEY");
-        assert_eq!(ProviderKind::Kimi.known_models(), &["kimi-for-coding"]);
+        assert_eq!(ProviderKind::Kimi.known_models(), &["kimi-for-coding", "kimi-k2.5"]);
+        assert!(ProviderKind::Kimi.model_matches_provider("kimi-for-coding"));
+        assert!(!ProviderKind::Kimi.model_matches_provider("deepseek-v4-pro"));
+        assert!(ProviderKind::DeepSeek.model_matches_provider("deepseek-v4-pro"));
+        assert!(!ProviderKind::DeepSeek.model_matches_provider("kimi-for-coding"));
+    }
+
+    #[test]
+    fn kimi_requires_upstream_user_agent() {
+        assert_eq!(
+            ProviderKind::Kimi.upstream_user_agent(),
+            Some(KIMI_UPSTREAM_USER_AGENT)
+        );
+        assert_eq!(ProviderKind::DeepSeek.upstream_user_agent(), None);
     }
 }
