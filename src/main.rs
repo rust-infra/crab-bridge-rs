@@ -60,9 +60,18 @@ async fn main() -> Result<()> {
             bind_addr,
             provider,
             all_providers,
+            providers,
         } => {
-            run_print_codex_config(api_key, base_url, model, bind_addr, provider, all_providers)
-                .await
+            run_print_codex_config(
+                api_key,
+                base_url,
+                model,
+                bind_addr,
+                provider,
+                all_providers,
+                providers,
+            )
+            .await
         }
         Commands::Setup(args) => run_setup(args).await,
     }
@@ -303,11 +312,14 @@ async fn run_print_codex_config(
     bind_addr: SocketAddr,
     provider: String,
     all_providers: bool,
+    providers: Option<Vec<String>>,
 ) -> Result<()> {
     let client = Client::new();
+    let slugs = ProviderKind::resolve_setup_slugs(all_providers, providers.as_deref(), &provider)
+        .map_err(|e| anyhow::anyhow!(e))?;
 
-    if all_providers {
-        for slug in ProviderKind::builtin_slugs() {
+    if slugs.len() > 1 || all_providers || providers.is_some() {
+        for slug in &slugs {
             let kind = ProviderKind::from_route(slug).unwrap_or(ProviderKind::Custom);
             let upstream = validate_upstream(
                 &std::env::var(format!(
@@ -363,25 +375,24 @@ async fn run_setup(
         config,
         docker,
         all_providers,
+        providers,
     }: SetupArgs,
 ) -> Result<()> {
+    let slugs = if docker && providers.is_none() && !all_providers && config.is_file() {
+        load_config_file(&config)
+            .ok()
+            .filter(|cfg| !cfg.providers.is_empty())
+            .map(|cfg| cfg.providers.keys().cloned().collect())
+            .unwrap_or_else(|| {
+                vec![ProviderKind::parse(&provider).route_slug().to_string()]
+            })
+    } else {
+        ProviderKind::resolve_setup_slugs(all_providers, providers.as_deref(), &provider)
+            .map_err(|e| anyhow::anyhow!(e))?
+    };
+    let is_multi = slugs.len() > 1;
+
     if docker {
-        let slugs: Vec<String> = if all_providers {
-            ProviderKind::builtin_slugs()
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect()
-        } else if config.is_file() {
-            load_config_file(&config)
-                .ok()
-                .filter(|cfg| !cfg.providers.is_empty())
-                .map(|cfg| cfg.providers.keys().cloned().collect())
-                .unwrap_or_else(|| {
-                    vec![ProviderKind::parse(&provider).route_slug().to_string()]
-                })
-        } else {
-            vec![ProviderKind::parse(&provider).route_slug().to_string()]
-        };
         setup::run_setup_check(setup::SetupCheckOptions {
             provider_slugs: slugs,
             api_key,
@@ -392,27 +403,21 @@ async fn run_setup(
         return Ok(());
     }
 
-    let slugs: Vec<&str> = if all_providers {
-        ProviderKind::builtin_slugs().to_vec()
-    } else {
-        vec![ProviderKind::parse(&provider).route_slug()]
-    };
-
     for (idx, slug) in slugs.iter().enumerate() {
         let provider_kind = ProviderKind::from_route(slug).unwrap_or(ProviderKind::Custom);
         let resolved_key = setup::resolve_api_key(provider_kind, api_key.clone())?;
         let result = setup::run_setup(SetupOptions {
             provider: provider_kind,
-            provider_slug: (*slug).to_string(),
+            provider_slug: slug.clone(),
             api_key: resolved_key,
             base_url: base_url.clone(),
             model: model.clone(),
             bind_addr,
-            write_bridge_config: !codex_only && !all_providers,
-            write_multi_bridge_config: !codex_only && all_providers && idx == 0,
+            write_bridge_config: !codex_only && !is_multi,
+            write_multi_bridge_config: !codex_only && is_multi && idx == 0,
             bridge_config_path: config.clone(),
             force_bridge_config: force_config,
-            set_active_codex_provider: !all_providers || idx + 1 == slugs.len(),
+            set_active_codex_provider: !is_multi || idx + 1 == slugs.len(),
         })
         .await?;
         print_setup_summary(&result);

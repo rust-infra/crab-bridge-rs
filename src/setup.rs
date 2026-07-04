@@ -874,7 +874,7 @@ pub fn print_setup_check(report: &SetupCheckReport) {
     }
     println!();
     if report.has_failures() {
-        println!("Quick fix: crabridge setup --provider deepseek   # or --provider kimi");
+        println!("Quick fix: crabridge setup --provider deepseek   # or --providers kimi,deepseek");
     }
     println!();
 }

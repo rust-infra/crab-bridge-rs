@@ -60,6 +60,13 @@ pub enum Commands {
         provider: String,
         #[arg(long, help = "Print Codex snippets for deepseek + kimi")]
         all_providers: bool,
+        #[arg(
+            long,
+            value_delimiter = ',',
+            conflicts_with = "all_providers",
+            help = "Print Codex snippets for specific providers (e.g. kimi,deepseek)"
+        )]
+        providers: Option<Vec<String>>,
     },
     /// Write Codex config, model catalog, and optional bridge TOML config in one step
     Setup(SetupArgs),
@@ -97,8 +104,16 @@ pub struct SetupArgs {
     #[arg(long)]
     pub docker: bool,
     /// Setup Codex entries for deepseek + kimi in one run
-    #[arg(long)]
+    #[arg(long, conflicts_with = "providers")]
     pub all_providers: bool,
+    /// Setup specific providers in one run (e.g. kimi,deepseek)
+    #[arg(
+        long,
+        value_delimiter = ',',
+        conflicts_with = "all_providers",
+        help = "Comma-separated provider slugs to configure (e.g. kimi,deepseek)"
+    )]
+    pub providers: Option<Vec<String>>,
 }
 
 #[derive(Parser, Debug)]
