@@ -294,7 +294,7 @@ pub fn resolve_serve_providers(cfg: Option<&BridgeConfigFile>) -> Result<ServePr
         .or_else(|| env::var("CRABRIDGE_DEFAULT_PROVIDER").ok())
         .or_else(|| env::var("CRABRIDGE_PROVIDER").ok())
         .filter(|slug| providers.contains_key(slug))
-        .or_else(|| providers.keys().next().cloned());
+        .or_else(|| providers.keys().min().cloned());
 
     let default_provider = match default_provider {
         Some(slug) => slug,
@@ -420,10 +420,11 @@ fn set_if_missing(key: &str, value: Option<&str>) {
     let Some(value) = value.filter(|v| !v.is_empty()) else {
         return;
     };
-    if env::var_os(key).is_none() {
-        // SAFETY: called once at process start before other threads spawn.
-        unsafe { env::set_var(key, value) };
+    if env::var(key).is_ok_and(|v| !v.is_empty()) {
+        return;
     }
+    // SAFETY: called once at process start before other threads spawn.
+    unsafe { env::set_var(key, value) };
 }
 
 #[cfg(test)]

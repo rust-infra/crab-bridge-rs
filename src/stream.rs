@@ -61,8 +61,9 @@ fn should_finalize_stream_without_done(
     stream_err: bool,
     has_text: bool,
     has_tool_calls: bool,
+    has_reasoning: bool,
 ) -> bool {
-    !stream_done && !stream_err && (has_text || has_tool_calls)
+    !stream_done && !stream_err && (has_text || has_tool_calls || has_reasoning)
 }
 
 /// Translate an upstream Chat Completions SSE stream into a Responses API SSE stream.
@@ -422,6 +423,7 @@ pub fn translate_stream(
             stream_err,
             !accumulated_text.is_empty(),
             !tool_calls.is_empty(),
+            !accumulated_reasoning.is_empty(),
         ) {
             warn!("stream ended without [DONE] but content was received — treating as complete");
             stream_done = true;
@@ -594,19 +596,22 @@ mod tests {
     #[test]
     fn should_finalize_stream_without_done_when_content_received() {
         assert!(should_finalize_stream_without_done(
-            false, false, true, false
+            false, false, true, false, false
         ));
         assert!(should_finalize_stream_without_done(
-            false, false, false, true
+            false, false, false, true, false
+        ));
+        assert!(should_finalize_stream_without_done(
+            false, false, false, false, true
         ));
         assert!(!should_finalize_stream_without_done(
-            true, false, true, false
+            true, false, true, false, false
         ));
         assert!(!should_finalize_stream_without_done(
-            false, true, true, false
+            false, true, true, false, false
         ));
         assert!(!should_finalize_stream_without_done(
-            false, false, false, false
+            false, false, false, false, false
         ));
     }
 }

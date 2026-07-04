@@ -534,7 +534,7 @@ async fn handle_blocking(args: BlockingArgs) -> Response {
     if let Some(cache) = &state.cache
         && let Ok(body) = state.upstream_request.request_body(&chat_req)
     {
-        let key = ResponseCache::cache_key(&provider, &body);
+        let key = ResponseCache::cache_key(&provider, &url, &api_key, &body);
         if let Some(cached) = cache.get(&key).await {
             info!(
                 provider,
@@ -665,7 +665,7 @@ async fn handle_blocking(args: BlockingArgs) -> Response {
                 if let Some(cache) = &state.cache
                     && let Ok(body) = state.upstream_request.request_body(&chat_req)
                 {
-                    let key = ResponseCache::cache_key(&provider, &body);
+                    let key = ResponseCache::cache_key(&provider, &url, &api_key, &body);
                     if let Ok(bytes) = serde_json::to_vec(&resp) {
                         cache.insert(key, bytes::Bytes::from(bytes)).await;
                     }

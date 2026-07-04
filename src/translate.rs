@@ -72,7 +72,6 @@ pub fn to_chat_request(
                             tc.get("id").and_then(|v| v.as_str()).map(String::from)
                         }));
                     }
-                    ids.extend(msg.tool_call_id.iter().cloned());
                     ids
                 })
                 .collect();
@@ -113,6 +112,10 @@ pub fn to_chat_request(
                             break;
                         }
                         let call_id = cur.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+                        if existing_call_ids.contains(call_id) {
+                            i += 1;
+                            continue;
+                        }
                         let name = response_function_name_for_chat(cur);
                         let args = cur
                             .get("arguments")
@@ -490,6 +493,19 @@ pub fn from_chat_response_with_tool_map(
             "content": [{
                 "type": "output_text",
                 "text": text,
+            }],
+        }));
+    }
+
+    if let Some(reasoning) = &choice.message.reasoning_content
+        && !reasoning.is_empty()
+    {
+        output.push(json!({
+            "type": "reasoning",
+            "id": format!("rs_{}", uuid::Uuid::new_v4().simple()),
+            "summary": [{
+                "type": "summary_text",
+                "text": reasoning,
             }],
         }));
     }

@@ -201,7 +201,7 @@ pub fn merge_codex_config(
 
     let mut doc = existing
         .parse::<DocumentMut>()
-        .unwrap_or_else(|_| DocumentMut::new());
+        .with_context(|| format!("existing {} is not valid TOML", path.display()))?;
 
     if set_active {
         doc.insert("model_provider", value(provider_name));
@@ -229,7 +229,7 @@ pub fn merge_codex_config(
         .entry("model_providers")
         .or_insert(Item::Table(Table::new()))
         .as_table_mut()
-        .expect("model_providers table");
+        .with_context(|| "model_providers must be a TOML table")?;
     providers.insert(provider_name, Item::Table(provider_table));
 
     fs::write(path, doc.to_string())
@@ -351,7 +351,7 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
 
     let model_provider = doc.get("model_provider").and_then(|v| v.as_str());
     match model_provider {
-        Some(name) if name.starts_with("crabbridge") => push_check(
+        Some(name) if name.starts_with("crabbridge-") => push_check(
             &mut checks,
             "model_provider",
             CheckStatus::Ok,
@@ -690,7 +690,8 @@ async fn check_bridge_route(
         .build()
         .unwrap_or_else(|_| Client::new());
 
-    if let Some(url) = [route_probe].into_iter().chain(health_urls).next() {
+    let mut last_result = None;
+    for url in [route_probe].into_iter().chain(health_urls) {
         match client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => {
                 push_check(
@@ -699,24 +700,27 @@ async fn check_bridge_route(
                     CheckStatus::Ok,
                     format!("GET {url} → {}", resp.status()),
                 );
+                return;
             }
             Ok(resp) => {
-                push_check(
-                    checks,
-                    &format!("[{slug}] bridge reachability"),
+                last_result = Some((
                     CheckStatus::Warn,
                     format!("GET {url} → HTTP {}", resp.status()),
-                );
+                ));
             }
             Err(e) => {
-                push_check(
-                    checks,
-                    &format!("[{slug}] bridge reachability"),
-                    CheckStatus::Fail,
-                    format!("GET {url} failed: {e}"),
-                );
+                last_result = Some((CheckStatus::Fail, format!("GET {url} failed: {e}")));
             }
         }
+    }
+
+    if let Some((status, detail)) = last_result {
+        push_check(
+            checks,
+            &format!("[{slug}] bridge reachability"),
+            status,
+            detail,
+        );
     }
 }
 

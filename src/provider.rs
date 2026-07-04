@@ -341,10 +341,11 @@ fn bridge_route_from_url(base_url: &str) -> Option<&str> {
 }
 
 fn set_if_missing(key: &str, value: &str) {
-    if env::var_os(key).is_none() {
-        // SAFETY: called once at process start before other threads spawn.
-        unsafe { env::set_var(key, value) };
+    if env::var(key).is_ok_and(|v| !v.is_empty()) {
+        return;
     }
+    // SAFETY: called once at process start before other threads spawn.
+    unsafe { env::set_var(key, value) };
 }
 
 #[cfg(test)]
