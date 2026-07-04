@@ -1,0 +1,173 @@
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::{
+    Router,
+    extract::DefaultBodyLimit,
+    routing::{get, post},
+};
+use crab_bridge_rs::handlers::{
+    api_root, handle_fallback, handle_models, handle_responses, health,
+};
+use crab_bridge_rs::session::SessionStore;
+use crab_bridge_rs::state::AppState;
+use crab_bridge_rs::upstream_request::UpstreamRequestConfig;
+use reqwest::Client;
+use serde_json::json;
+use tokio::net::TcpListener;
+
+async fn spawn_test_server(mock_base_url: &str) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("local addr");
+
+    let state = AppState {
+        sessions: SessionStore::with_limits_and_ttl(
+            64,
+            16 * 1024 * 1024,
+            Duration::from_secs(3600),
+        ),
+        client: Client::new(),
+        upstream: Arc::new(
+            mock_base_url
+                .parse()
+                .expect("mock upstream url must be valid"),
+        ),
+        api_key: Arc::new("test-key".to_string()),
+        default_model: Arc::new("deepseek-chat".to_string()),
+        default_max_tokens: None,
+        default_temperature: None,
+        upstream_request: Arc::new(UpstreamRequestConfig::default()),
+        cache: None,
+    };
+
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/v1", get(api_root))
+        .route("/v1/responses", post(handle_responses))
+        .route("/v1/models", get(handle_models))
+        .fallback(handle_fallback)
+        .layer(DefaultBodyLimit::disable())
+        .with_state(state);
+
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("test server failed");
+    });
+
+    (addr, handle)
+}
+
+#[tokio::test]
+async fn health_endpoint_returns_ok() {
+    let mock = mockito::Server::new_async().await;
+    let (addr, _handle) = spawn_test_server(&mock.url()).await;
+
+    let response: serde_json::Value = Client::new()
+        .get(format!("http://{addr}/health"))
+        .send()
+        .await
+        .expect("send")
+        .json()
+        .await
+        .expect("json");
+
+    assert_eq!(response["status"], "ok");
+}
+
+#[tokio::test]
+async fn non_stream_response_is_translated() {
+    let mut mock = mockito::Server::new_async().await;
+    let _mock = mock
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"choices":[{"message":{"role":"assistant","content":"hi there"}}]}"#)
+        .create_async()
+        .await;
+
+    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url())).await;
+
+    let response = Client::new()
+        .post(format!("http://{addr}/v1/responses"))
+        .json(&json!({
+            "model": "gpt-5.4",
+            "input": "hello",
+            "stream": false
+        }))
+        .send()
+        .await
+        .expect("send");
+
+    let status = response.status();
+    let body = response.text().await.expect("body");
+    assert!(status.is_success(), "status {status} body {body}");
+
+    let response: serde_json::Value = serde_json::from_str(&body).expect("json");
+
+    assert_eq!(response["object"], "response");
+    assert_eq!(response["output"][0]["content"][0]["text"], "hi there");
+}
+
+#[tokio::test]
+async fn stream_response_is_translated() {
+    let mut mock = mockito::Server::new_async().await;
+    let _mock = mock
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n")
+        .create_async()
+        .await;
+
+    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url())).await;
+
+    let body = Client::new()
+        .post(format!("http://{addr}/v1/responses"))
+        .json(&json!({
+            "model": "gpt-5.4",
+            "input": "hello",
+            "stream": true
+        }))
+        .send()
+        .await
+        .expect("send")
+        .text()
+        .await
+        .expect("text");
+
+    assert!(body.contains("response.output_text.delta"));
+    assert!(body.contains("response.completed"));
+}
+
+#[tokio::test]
+async fn models_endpoint_proxies_upstream() {
+    let mut mock = mockito::Server::new_async().await;
+    let _mock = mock
+        .mock("GET", "/v1/models")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"data":[{"id":"deepseek-chat"}]}"#)
+        .create_async()
+        .await;
+
+    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url())).await;
+
+    let response: serde_json::Value = Client::new()
+        .get(format!("http://{addr}/v1/models"))
+        .send()
+        .await
+        .expect("send")
+        .json()
+        .await
+        .expect("json");
+
+    assert_eq!(response["data"][0]["id"], "deepseek-chat");
+    assert_eq!(response["models"][0]["id"], "deepseek-chat");
+}
