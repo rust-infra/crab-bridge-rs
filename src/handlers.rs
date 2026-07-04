@@ -17,6 +17,7 @@ use crate::provider::{ProviderKind, apply_upstream_headers};
 use crate::state::{AppState, ProviderRuntime};
 use crate::stream::{self, StreamArgs};
 use crate::translate;
+use crate::translate::TranslationOptions;
 use crate::types::*;
 
 const DEBUG_NAME_LIMIT: usize = 80;
@@ -68,7 +69,11 @@ async fn api_root_for_provider(state: &AppState, provider: &str) -> Response {
     if state.provider(provider).is_some() {
         StatusCode::OK.into_response()
     } else {
-        (StatusCode::NOT_FOUND, format!("unknown provider: {provider}")).into_response()
+        (
+            StatusCode::NOT_FOUND,
+            format!("unknown provider: {provider}"),
+        )
+            .into_response()
     }
 }
 
@@ -85,7 +90,11 @@ pub async fn handle_models(
 
 async fn handle_models_inner(state: AppState, provider: &str, headers: &HeaderMap) -> Response {
     let Some(runtime) = state.provider(provider) else {
-        return (StatusCode::NOT_FOUND, format!("unknown provider: {provider}")).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            format!("unknown provider: {provider}"),
+        )
+            .into_response();
     };
     info!(provider, "GET /{provider}/v1/models");
     let kind = ProviderKind::from_route(provider).unwrap_or(ProviderKind::Custom);
@@ -180,11 +189,19 @@ async fn handle_responses_for_provider(
     body: axum::body::Bytes,
 ) -> Response {
     let Some(runtime) = state.provider(provider) else {
-        return (StatusCode::NOT_FOUND, format!("unknown provider: {provider}")).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            format!("unknown provider: {provider}"),
+        )
+            .into_response();
     };
 
     let started = Instant::now();
-    info!(provider, bytes = body.len(), "POST /{provider}/v1/responses");
+    info!(
+        provider,
+        bytes = body.len(),
+        "POST /{provider}/v1/responses"
+    );
     let req: ResponsesRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => {
@@ -247,11 +264,13 @@ async fn handle_responses_inner(
         &req,
         history,
         &state.sessions,
-        kind,
-        kind.default_model(),
-        runtime.model_map.as_deref(),
-        runtime.default_max_tokens,
-        runtime.default_temperature,
+        TranslationOptions {
+            provider: kind,
+            default_model: kind.default_model(),
+            model_map: runtime.model_map.as_deref(),
+            default_max_tokens: runtime.default_max_tokens,
+            default_temperature: runtime.default_temperature,
+        },
     );
     info!(
         provider,
@@ -297,16 +316,16 @@ async fn handle_responses_inner(
         .into_response()
     } else {
         chat_req.stream = false;
-        handle_blocking(
+        handle_blocking(BlockingArgs {
             state,
-            provider,
+            provider: provider.to_string(),
             api_key,
             chat_req,
             url,
             model,
             namespace_tools,
             started,
-        )
+        })
         .await
     }
 }
@@ -487,23 +506,35 @@ fn parse_spawn_agent_call(call: &serde_json::Value) -> Option<SpawnAgentCall> {
     })
 }
 
-async fn handle_blocking(
+struct BlockingArgs {
     state: AppState,
-    provider: &str,
+    provider: String,
     api_key: Arc<String>,
     chat_req: ChatRequest,
     url: String,
     model: String,
     namespace_tools: translate::NamespaceToolMap,
     started: Instant,
-) -> Response {
+}
+
+async fn handle_blocking(args: BlockingArgs) -> Response {
+    let BlockingArgs {
+        state,
+        provider,
+        api_key,
+        chat_req,
+        url,
+        model,
+        namespace_tools,
+        started,
+    } = args;
     let messages = chat_req.messages.len();
     let tools = chat_req.tools.len();
 
     if let Some(cache) = &state.cache
         && let Ok(body) = state.upstream_request.request_body(&chat_req)
     {
-        let key = ResponseCache::cache_key(provider, &body);
+        let key = ResponseCache::cache_key(&provider, &body);
         if let Some(cached) = cache.get(&key).await {
             info!(
                 provider,
@@ -520,7 +551,7 @@ async fn handle_blocking(
         }
     }
 
-    let kind = ProviderKind::from_route(provider).unwrap_or(ProviderKind::Custom);
+    let kind = ProviderKind::from_route(&provider).unwrap_or(ProviderKind::Custom);
     let builder = apply_upstream_headers(
         state
             .client
@@ -540,7 +571,9 @@ async fn handle_blocking(
             return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
     };
-    let request_bytes = serde_json::to_vec(&upstream_body).map(|b| b.len()).unwrap_or(0);
+    let request_bytes = serde_json::to_vec(&upstream_body)
+        .map(|b| b.len())
+        .unwrap_or(0);
 
     info!(
         model = %chat_req.model,
@@ -616,7 +649,7 @@ async fn handle_blocking(
 
                 let mut full_history = chat_req.messages.clone();
                 full_history.push(assistant_msg);
-                let response_id = state.sessions.save(provider, full_history);
+                let response_id = state.sessions.save(&provider, full_history);
 
                 let (resp, _) = if namespace_tools.is_empty() {
                     translate::from_chat_response(response_id.clone(), &model, chat_resp)
@@ -632,7 +665,7 @@ async fn handle_blocking(
                 if let Some(cache) = &state.cache
                     && let Ok(body) = state.upstream_request.request_body(&chat_req)
                 {
-                    let key = ResponseCache::cache_key(provider, &body);
+                    let key = ResponseCache::cache_key(&provider, &body);
                     if let Ok(bytes) = serde_json::to_vec(&resp) {
                         cache.insert(key, bytes::Bytes::from(bytes)).await;
                     }

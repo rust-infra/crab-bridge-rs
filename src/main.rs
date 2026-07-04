@@ -218,8 +218,8 @@ async fn run_prompt(
     provider: String,
 ) -> Result<()> {
     let provider_kind = ProviderKind::parse(&provider);
-    let api_key = resolve_api_key(provider_kind.route_slug(), provider_kind, None)
-        .context(format!(
+    let api_key =
+        resolve_api_key(provider_kind.route_slug(), provider_kind, None).context(format!(
             "no API key in environment — set {}",
             provider_kind.codex_env_key()
         ))?;
@@ -301,17 +301,15 @@ async fn run_print_codex_config(
         for slug in &slugs {
             let kind = ProviderKind::from_route(slug).unwrap_or(ProviderKind::Custom);
             let upstream = validate_upstream_url(
-                &std::env::var(format!(
-                    "CRABRIDGE_{}_BASE_URL",
-                    slug.to_ascii_uppercase()
-                ))
-                .unwrap_or_else(|_| kind.default_base_url().to_string()),
+                &std::env::var(format!("CRABRIDGE_{}_BASE_URL", slug.to_ascii_uppercase()))
+                    .unwrap_or_else(|_| kind.default_base_url().to_string()),
             )?;
             let key = std::env::var(format!("CRABRIDGE_{}_API_KEY", slug.to_ascii_uppercase()))
                 .or_else(|_| std::env::var("UPSTREAM_API_KEY"))
                 .unwrap_or(api_key.clone());
-            let model_name = std::env::var(format!("CRABRIDGE_{}_MODEL", slug.to_ascii_uppercase()))
-                .unwrap_or_else(|_| kind.default_model().to_string());
+            let model_name =
+                std::env::var(format!("CRABRIDGE_{}_MODEL", slug.to_ascii_uppercase()))
+                    .unwrap_or_else(|_| kind.default_model().to_string());
             print_codex_config(
                 &client,
                 &upstream,
@@ -363,9 +361,7 @@ async fn run_setup(
             .ok()
             .filter(|cfg| !cfg.providers.is_empty())
             .map(|cfg| cfg.providers.keys().cloned().collect())
-            .unwrap_or_else(|| {
-                vec![ProviderKind::parse(&provider).route_slug().to_string()]
-            })
+            .unwrap_or_else(|| vec![ProviderKind::parse(&provider).route_slug().to_string()])
     } else {
         ProviderKind::resolve_setup_slugs(all_providers, providers.as_deref(), &provider)
             .map_err(|e| anyhow::anyhow!(e))?
@@ -395,11 +391,7 @@ async fn run_setup(
             bind_addr,
             write_bridge_config: !codex_only && !is_multi,
             write_multi_bridge_config: !codex_only && is_multi && idx == 0,
-            multi_provider_slugs: if is_multi {
-                Some(slugs.clone())
-            } else {
-                None
-            },
+            multi_provider_slugs: if is_multi { Some(slugs.clone()) } else { None },
             bridge_config_path: config.clone(),
             force_bridge_config: force_config,
             set_active_codex_provider: !is_multi || idx + 1 == slugs.len(),

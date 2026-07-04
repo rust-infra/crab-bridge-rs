@@ -12,7 +12,13 @@ use crate::session::{DEFAULT_MAX_SESSIONS, DEFAULT_SESSION_TTL};
 )]
 pub struct Cli {
     /// Path to crabbridge.toml (also `CRABRIDGE_CONFIG`)
-    #[arg(short = 'c', long, global = true, env = "CRABRIDGE_CONFIG", value_name = "FILE")]
+    #[arg(
+        short = 'c',
+        long,
+        global = true,
+        env = "CRABRIDGE_CONFIG",
+        value_name = "FILE"
+    )]
     pub config: Option<PathBuf>,
 
     #[command(subcommand)]

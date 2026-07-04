@@ -114,10 +114,10 @@ impl SqliteStore {
     }
 
     pub fn remove_session(&self, id: &str) {
-        if let Err(e) = self.conn.execute(
-            "DELETE FROM sessions WHERE response_id = ?1",
-            params![id],
-        ) {
+        if let Err(e) = self
+            .conn
+            .execute("DELETE FROM sessions WHERE response_id = ?1", params![id])
+        {
             warn!("failed to delete sqlite session {id}: {e}");
         }
     }
@@ -173,10 +173,10 @@ impl SqliteStore {
     }
 
     pub fn remove_reasoning(&self, key: &str) {
-        if let Err(e) = self.conn.execute(
-            "DELETE FROM reasoning WHERE key = ?1",
-            params![key],
-        ) {
+        if let Err(e) = self
+            .conn
+            .execute("DELETE FROM reasoning WHERE key = ?1", params![key])
+        {
             warn!("failed to delete sqlite reasoning {key}: {e}");
         }
     }
@@ -251,8 +251,9 @@ impl SqliteStore {
     }
 
     fn load_reasoning_rows(&self, table: &str) -> Vec<DiskReasoningRecord> {
-        let sql =
-            format!("SELECT key, provider, created_at_ms, last_used_at_ms, bytes, value FROM {table}");
+        let sql = format!(
+            "SELECT key, provider, created_at_ms, last_used_at_ms, bytes, value FROM {table}"
+        );
         let mut stmt = match self.conn.prepare(&sql) {
             Ok(stmt) => stmt,
             Err(e) => {

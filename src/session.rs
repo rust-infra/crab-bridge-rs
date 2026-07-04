@@ -409,7 +409,8 @@ impl SessionState {
         if let Some(old) = self.turn_reasoning.remove(&hash) {
             self.stored_bytes = self.stored_bytes.saturating_sub(old.bytes);
         }
-        self.turn_reasoning_order.retain(|existing| existing != &hash);
+        self.turn_reasoning_order
+            .retain(|existing| existing != &hash);
 
         let bytes = std::mem::size_of::<u64>().saturating_add(reasoning.len());
         let key_string = hash.to_string();
@@ -775,7 +776,11 @@ mod tests {
         let store = SessionStore::new();
         let id = store.save("deepseek", vec![msg("user", Some("hello"))]);
         assert_eq!(store.get_history(&id).len(), 1);
-        store.save_with_id("kimi", id.clone(), vec![msg("user", Some("hello")), msg("assistant", Some("hi"))]);
+        store.save_with_id(
+            "kimi",
+            id.clone(),
+            vec![msg("user", Some("hello")), msg("assistant", Some("hi"))],
+        );
         assert_eq!(store.get_history(&id).len(), 2);
     }
 
@@ -803,8 +808,14 @@ mod tests {
     #[test]
     fn test_evicts_oldest_session_by_bytes() {
         let store = SessionStore::with_limits(10, 64);
-        let id1 = store.save(TEST_PROVIDER, vec![msg("user", Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))]);
-        let id2 = store.save(TEST_PROVIDER, vec![msg("user", Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))]);
+        let id1 = store.save(
+            TEST_PROVIDER,
+            vec![msg("user", Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))],
+        );
+        let id2 = store.save(
+            TEST_PROVIDER,
+            vec![msg("user", Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))],
+        );
         let id3 = store.save(TEST_PROVIDER, vec![msg("user", Some("c"))]);
 
         assert!(store.get_history(&id1).is_empty());
@@ -815,15 +826,26 @@ mod tests {
     #[test]
     fn test_oversized_session_not_cached() {
         let store = SessionStore::with_limits(10, 10);
-        let id = store.save(TEST_PROVIDER, vec![msg("user", Some("this message is too large"))]);
+        let id = store.save(
+            TEST_PROVIDER,
+            vec![msg("user", Some("this message is too large"))],
+        );
         assert!(store.get_history(&id).is_empty());
     }
 
     #[test]
     fn test_reasoning_entries_are_bounded_by_bytes() {
         let store = SessionStore::with_limits(10, 36);
-        store.store_reasoning(TEST_PROVIDER, "call_1".into(), "aaaaaaaaaaaaaaaaaaaaaaaa".into());
-        store.store_reasoning(TEST_PROVIDER, "call_2".into(), "bbbbbbbbbbbbbbbbbbbbbbbb".into());
+        store.store_reasoning(
+            TEST_PROVIDER,
+            "call_1".into(),
+            "aaaaaaaaaaaaaaaaaaaaaaaa".into(),
+        );
+        store.store_reasoning(
+            TEST_PROVIDER,
+            "call_2".into(),
+            "bbbbbbbbbbbbbbbbbbbbbbbb".into(),
+        );
 
         assert_eq!(store.get_reasoning("call_1"), None);
         assert_eq!(
@@ -839,11 +861,8 @@ mod tests {
 
         {
             let mut state = store.state.lock().unwrap();
-            state
-                .sessions
-                .get_mut(&id)
-                .unwrap()
-                .last_used_at = SystemTime::now() - Duration::from_secs(61);
+            state.sessions.get_mut(&id).unwrap().last_used_at =
+                SystemTime::now() - Duration::from_secs(61);
         }
 
         store.cleanup();
@@ -857,11 +876,8 @@ mod tests {
 
         {
             let mut state = store.state.lock().unwrap();
-            state
-                .reasoning
-                .get_mut("call_old")
-                .unwrap()
-                .last_used_at = SystemTime::now() - Duration::from_secs(61);
+            state.reasoning.get_mut("call_old").unwrap().last_used_at =
+                SystemTime::now() - Duration::from_secs(61);
         }
 
         store.cleanup();
@@ -875,7 +891,10 @@ mod tests {
             let store =
                 SessionStore::with_sqlite_limits_and_ttl(&db, 10, 1024, Duration::from_secs(60))
                     .unwrap();
-            store.save(TEST_PROVIDER, vec![msg("user", Some("hi")), msg("assistant", Some("hey"))])
+            store.save(
+                TEST_PROVIDER,
+                vec![msg("user", Some("hi")), msg("assistant", Some("hey"))],
+            )
         };
 
         let store =

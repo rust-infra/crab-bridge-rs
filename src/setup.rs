@@ -96,8 +96,7 @@ pub async fn run_setup(opts: SetupOptions) -> Result<SetupResult> {
     let model = opts
         .model
         .unwrap_or_else(|| opts.provider.default_model().to_string());
-    let upstream = config::validate_upstream_url(&base_url)
-        .context("invalid upstream base URL")?;
+    let upstream = config::validate_upstream_url(&base_url).context("invalid upstream base URL")?;
 
     let client = Client::new();
     let models = prepare_model_catalog(
@@ -162,11 +161,7 @@ pub async fn run_setup(opts: SetupOptions) -> Result<SetupResult> {
             info!(path = %path.display(), "bridge config already exists (unchanged)");
             Some(path)
         } else {
-            config::write_bridge_config(
-                &path,
-                opts.provider,
-                &opts.bind_addr.to_string(),
-            )?;
+            config::write_bridge_config(&path, opts.provider, &opts.bind_addr.to_string())?;
             bridge_config_created = true;
             Some(path)
         }
@@ -217,7 +212,10 @@ pub fn merge_codex_config(
         );
     }
 
-    if let Some(providers) = doc.get_mut("model_providers").and_then(|i| i.as_table_mut()) {
+    if let Some(providers) = doc
+        .get_mut("model_providers")
+        .and_then(|i| i.as_table_mut())
+    {
         providers.remove(LEGACY_PROVIDER_NAME);
     }
 
@@ -252,16 +250,25 @@ pub fn print_setup_summary(result: &SetupResult) {
         println!("  Bridge config:   {}", path.display());
     }
     println!();
-    println!("Codex expects {} in your shell environment.", result.codex_env_key);
+    println!(
+        "Codex expects {} in your shell environment.",
+        result.codex_env_key
+    );
     println!();
     println!("Next steps:");
-    println!("  1. export {}=sk-...   # if not already set", result.codex_env_key);
+    println!(
+        "  1. export {}=sk-...   # if not already set",
+        result.codex_env_key
+    );
     if result.bridge_config_created {
         println!("  2. crabridge serve    # uses the generated TOML config");
     } else {
         println!("  2. crabridge serve");
     }
-    println!("  3. Restart Codex — it should show model: {}", result.model);
+    println!(
+        "  3. Restart Codex — it should show model: {}",
+        result.model
+    );
     println!();
 }
 
@@ -370,20 +377,13 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
         ),
     }
 
-    let active_model = doc.get("model").and_then(|v| v.as_str()).map(str::to_string);
+    let active_model = doc
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     match &active_model {
-        Some(m) => push_check(
-            &mut checks,
-            "model",
-            CheckStatus::Ok,
-            m.clone(),
-        ),
-        None => push_check(
-            &mut checks,
-            "model",
-            CheckStatus::Fail,
-            "not set".into(),
-        ),
+        Some(m) => push_check(&mut checks, "model", CheckStatus::Ok, m.clone()),
+        None => push_check(&mut checks, "model", CheckStatus::Fail, "not set".into()),
     }
 
     check_bridge_config_file(&mut checks, &opts.bridge_config_path);
@@ -532,7 +532,7 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
         }
 
         let expected_env_key = kind.codex_env_key();
-        match config::resolve_api_key(&slug, kind, opts.api_key.clone()) {
+        match config::resolve_api_key(slug, kind, opts.api_key.clone()) {
             Some(_) => push_check(
                 &mut checks,
                 &format!("[{slug}] API key env"),
@@ -547,30 +547,30 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
             ),
         }
 
-        if let Some(m) = &active_model {
-            if model_provider == Some(codex_name.as_str()) {
-                if catalog_models.is_empty() {
-                    push_check(
-                        &mut checks,
-                        &format!("[{slug}] model in catalog"),
-                        CheckStatus::Warn,
-                        format!("cannot verify \"{m}\" — catalog empty or unreadable"),
-                    );
-                } else if catalog_models.iter().any(|s| s == m) {
-                    push_check(
-                        &mut checks,
-                        &format!("[{slug}] model in catalog"),
-                        CheckStatus::Ok,
-                        format!("\"{m}\" found"),
-                    );
-                } else {
-                    push_check(
-                        &mut checks,
-                        &format!("[{slug}] model in catalog"),
-                        CheckStatus::Fail,
-                        format!("\"{m}\" missing from catalog (causes metadata warnings)"),
-                    );
-                }
+        if let Some(m) = &active_model
+            && model_provider == Some(codex_name.as_str())
+        {
+            if catalog_models.is_empty() {
+                push_check(
+                    &mut checks,
+                    &format!("[{slug}] model in catalog"),
+                    CheckStatus::Warn,
+                    format!("cannot verify \"{m}\" — catalog empty or unreadable"),
+                );
+            } else if catalog_models.iter().any(|s| s == m) {
+                push_check(
+                    &mut checks,
+                    &format!("[{slug}] model in catalog"),
+                    CheckStatus::Ok,
+                    format!("\"{m}\" found"),
+                );
+            } else {
+                push_check(
+                    &mut checks,
+                    &format!("[{slug}] model in catalog"),
+                    CheckStatus::Fail,
+                    format!("\"{m}\" missing from catalog (causes metadata warnings)"),
+                );
             }
         }
 
@@ -690,7 +690,7 @@ async fn check_bridge_route(
         .build()
         .unwrap_or_else(|_| Client::new());
 
-    for url in [route_probe].into_iter().chain(health_urls) {
+    if let Some(url) = [route_probe].into_iter().chain(health_urls).next() {
         match client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => {
                 push_check(
@@ -699,7 +699,6 @@ async fn check_bridge_route(
                     CheckStatus::Ok,
                     format!("GET {url} → {}", resp.status()),
                 );
-                return;
             }
             Ok(resp) => {
                 push_check(
@@ -708,7 +707,6 @@ async fn check_bridge_route(
                     CheckStatus::Warn,
                     format!("GET {url} → HTTP {}", resp.status()),
                 );
-                return;
             }
             Err(e) => {
                 push_check(
@@ -717,7 +715,6 @@ async fn check_bridge_route(
                     CheckStatus::Fail,
                     format!("GET {url} failed: {e}"),
                 );
-                return;
             }
         }
     }
@@ -726,20 +723,20 @@ async fn check_bridge_route(
 fn bridge_health_urls(base_url: &str, in_docker: bool, bind_addr: SocketAddr) -> Vec<String> {
     let trimmed = base_url.trim_end_matches('/');
     let mut root = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
-    if let Some((without_slug, slug)) = root.rsplit_once('/') {
-        if ProviderKind::from_route(slug).is_some() {
-            root = without_slug;
-        }
+    if let Some((without_slug, slug)) = root.rsplit_once('/')
+        && ProviderKind::from_route(slug).is_some()
+    {
+        root = without_slug;
     }
     let mut urls = vec![format!("{root}/health")];
 
-    if in_docker && bind_addr.ip().is_unspecified() {
-        if let Ok(parsed) = Url::parse(trimmed) {
-            if parsed.host_str() == Some("127.0.0.1") || parsed.host_str() == Some("localhost") {
-                let port = parsed.port().unwrap_or(11435);
-                urls.push(format!("http://127.0.0.1:{port}/health"));
-            }
-        }
+    if in_docker
+        && bind_addr.ip().is_unspecified()
+        && let Ok(parsed) = Url::parse(trimmed)
+        && (parsed.host_str() == Some("127.0.0.1") || parsed.host_str() == Some("localhost"))
+    {
+        let port = parsed.port().unwrap_or(11435);
+        urls.push(format!("http://127.0.0.1:{port}/health"));
     }
 
     urls
@@ -767,14 +764,14 @@ fn check_docker_url_hints(
              or the host gateway IP (Linux)"
                 .into(),
         );
-    } else if !in_docker && (host == "host.docker.internal" || host.ends_with(".docker.internal"))
-    {
+    } else if !in_docker && (host == "host.docker.internal" || host.ends_with(".docker.internal")) {
         push_check(
             checks,
             "docker networking",
             CheckStatus::Warn,
-            format!("base_url targets Docker host DNS — use http://127.0.0.1:11435/{slug}/v1 when Codex runs on the same host")
-                .into(),
+            format!(
+                "base_url targets Docker host DNS — use http://127.0.0.1:11435/{slug}/v1 when Codex runs on the same host"
+            ),
         );
     } else if !in_docker && is_loopback {
         push_check(
@@ -897,7 +894,11 @@ trust_level = "trusted"
 
     #[test]
     fn bridge_health_url_strips_v1_suffix() {
-        let urls = bridge_health_urls("http://127.0.0.1:11435/v1", false, "127.0.0.1:11435".parse().unwrap());
+        let urls = bridge_health_urls(
+            "http://127.0.0.1:11435/v1",
+            false,
+            "127.0.0.1:11435".parse().unwrap(),
+        );
         assert_eq!(urls[0], "http://127.0.0.1:11435/health");
     }
 

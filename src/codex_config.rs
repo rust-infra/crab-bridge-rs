@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::net::SocketAddr;
 
 use reqwest::{Client, Url};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::handlers::join_base;
 use crate::provider::{ProviderKind, apply_upstream_headers};
@@ -59,10 +59,7 @@ pub async fn print_codex_config(
     let catalog_path = catalog_path_for_slug(route_slug);
     match write_model_catalog(&catalog_path, &models) {
         Ok(()) => {
-            eprintln!(
-                "// Wrote Codex model catalog to {}",
-                catalog_path.display()
-            );
+            eprintln!("// Wrote Codex model catalog to {}", catalog_path.display());
         }
         Err(e) => {
             eprintln!(

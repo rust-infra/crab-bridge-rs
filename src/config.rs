@@ -147,7 +147,9 @@ pub fn user_config_path() -> PathBuf {
             .join("config.toml");
     }
     if let Some(appdata) = env::var_os("APPDATA") {
-        return PathBuf::from(appdata).join("crabbridge").join("config.toml");
+        return PathBuf::from(appdata)
+            .join("crabbridge")
+            .join("config.toml");
     }
     PathBuf::from("config.toml")
 }
@@ -181,7 +183,10 @@ pub fn load_config_file(path: &Path) -> Result<BridgeConfigFile> {
 }
 
 pub fn apply_config_to_env(cfg: &BridgeConfigFile) {
-    set_if_missing("CRABRIDGE_DEFAULT_PROVIDER", cfg.default_provider.as_deref());
+    set_if_missing(
+        "CRABRIDGE_DEFAULT_PROVIDER",
+        cfg.default_provider.as_deref(),
+    );
     set_if_missing("CRABRIDGE_PROVIDER", cfg.provider.as_deref());
 
     if !cfg.providers.is_empty() {
@@ -208,7 +213,10 @@ pub fn apply_config_to_env(cfg: &BridgeConfigFile) {
     if let Some(session) = &cfg.session {
         set_if_missing("SESSION_DB", session.db.as_deref());
         if let Some(v) = session.memory_only {
-            set_if_missing("SESSION_MEMORY_ONLY", Some(if v { "true" } else { "false" }));
+            set_if_missing(
+                "SESSION_MEMORY_ONLY",
+                Some(if v { "true" } else { "false" }),
+            );
         }
         if let Some(v) = session.max_sessions {
             set_if_missing("MAX_SESSIONS", Some(&v.to_string()));
@@ -310,11 +318,7 @@ fn legacy_provider_slug_opt(cfg: &BridgeConfigFile) -> Option<String> {
 }
 
 /// Resolve an upstream API key for setup / CLI tools (Codex passes keys per request).
-pub fn resolve_api_key(
-    slug: &str,
-    kind: ProviderKind,
-    explicit: Option<String>,
-) -> Option<String> {
+pub fn resolve_api_key(slug: &str, kind: ProviderKind, explicit: Option<String>) -> Option<String> {
     if let Some(key) = explicit.filter(|k| !k.is_empty()) {
         return Some(key);
     }
@@ -403,11 +407,11 @@ pub fn write_multi_bridge_config(
          # tool_denylist = \"spawn_agent,wait_agent\"\n"
     ));
 
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     fs::write(path, body).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
@@ -473,13 +477,8 @@ model = "kimi-for-coding"
     fn write_and_reload_multi_provider() {
         let dir = temp_dir("multi");
         let path = dir.join("crabbridge.toml");
-        write_multi_bridge_config(
-            &path,
-            "deepseek",
-            &["deepseek", "kimi"],
-            "127.0.0.1:11435",
-        )
-        .unwrap();
+        write_multi_bridge_config(&path, "deepseek", &["deepseek", "kimi"], "127.0.0.1:11435")
+            .unwrap();
 
         let cfg = load_config_file(&path).unwrap();
         assert_eq!(cfg.default_provider.as_deref(), Some("deepseek"));
