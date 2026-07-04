@@ -7,15 +7,24 @@
 ## 1. Project Overview
 
 **Name**: CrabBridge  
-**Description**: A lightweight Rust protocol-conversion proxy that bridges **Codex CLI** (OpenAI Responses API) requests to the **DeepSeek Chat Completions API**.  
+**Description**: A lightweight Rust protocol-conversion proxy that bridges **Codex CLI** (OpenAI Responses API) to **DeepSeek** or **Kimi Code** Chat Completions APIs.  
 **Goal**: Let Codex connect to a local bridge via `wire_api = "responses"`, while the bridge handles protocol translation, session continuity, tool-call mapping, and streaming SSE conversion.
 
 **Core data flow**:
 
 ```
-Codex CLI  ──Responses API──▶  CrabBridge  ──Chat Completions──▶  DeepSeek
-              /v1/responses              /v1/chat/completions
+Codex CLI  ──Responses API──▶  CrabBridge  ──Chat Completions──▶  DeepSeek / Kimi
+         /{provider}/v1/responses              /v1/chat/completions
 ```
+
+One `crabridge serve` process can host **multiple upstream providers**. Codex selects the upstream via `base_url` path:
+
+| Codex `base_url` | Upstream |
+|------------------|----------|
+| `http://127.0.0.1:11435/deepseek/v1` | DeepSeek |
+| `http://127.0.0.1:11435/kimi/v1` | Kimi Code |
+
+Legacy `/v1/*` routes still work and map to `default_provider` from `crabbridge.toml`.
 
 **Does not expose** `/v1/chat/completions`. Clients must speak the Responses API (Codex CLI is the primary target).
 
@@ -53,19 +62,22 @@ crab-bridge-rs/
 ├── .gitignore
 ├── AGENT_SPEC.md
 ├── src/
-│   ├── main.rs              # Entry: serve / prompt / print-codex-config
+│   ├── main.rs              # Entry: serve / prompt / setup / print-codex-config
 │   ├── lib.rs               # Module exports
-│   ├── opts.rs              # Clap CLI (ServeArgs, etc.)
-│   ├── handlers.rs          # HTTP handlers (/v1/responses, /v1/models, /health)
-│   ├── state.rs             # AppState shared state
+│   ├── opts.rs              # Clap CLI (ServeArgs, SetupArgs, etc.)
+│   ├── config.rs            # crabbridge.toml load + provider resolution
+│   ├── provider.rs          # DeepSeek / Kimi presets, route slugs
+│   ├── setup.rs             # setup + setup --docker config checks
+│   ├── handlers.rs          # HTTP handlers (routed + legacy /v1)
+│   ├── state.rs             # AppState + per-provider ProviderRuntime
 │   ├── types.rs             # Responses + Chat Completions type definitions
 │   ├── translate.rs         # Responses ↔ Chat conversion, model/tool mapping
 │   ├── stream.rs            # Chat SSE → Responses SSE streaming translation
 │   ├── session.rs           # Session store (previous_response_id, reasoning replay)
-│   ├── session_sqlite.rs    # SQLite persistence layer
+│   ├── session_sqlite.rs    # SQLite persistence layer (keyed by provider slug)
 │   ├── upstream_request.rs  # Upstream request body + tool denylist
 │   ├── cache.rs             # Non-streaming response cache (moka)
-│   ├── codex_config.rs      # print-codex-config Codex config.toml snippet
+│   ├── codex_config.rs      # print-codex-config / setup catalog generation
 │   ├── prompt.rs            # ResponsesSseParser (prompt subcommand streaming)
 │   └── error.rs             # Error types
 └── tests/
@@ -78,291 +90,205 @@ crab-bridge-rs/
 
 ### 4.1 `src/opts.rs`
 
-**Role**: Define CLI subcommands and arguments.
-
 **Subcommands**:
 
 | Subcommand | Description |
 |------------|-------------|
-| `serve` | Start the HTTP bridge server (args in `ServeArgs`) |
-| `prompt` | Send a test request to local `/v1/responses` |
-| `print-codex-config` | Print a Codex `config.toml` snippet |
+| `serve` | Start the HTTP bridge server (`ServeArgs`) |
+| `prompt` | Send a test request to `/{provider}/v1/responses` |
+| `setup` | Write Codex config + optional `crabbridge.toml` |
+| `setup --docker` | Read-only configuration check |
+| `print-codex-config` | Print Codex `config.toml` snippet(s) |
 
-**Key `ServeArgs` fields**: `api_key`, `base_url`, `model`, `bind_addr`, `max_tokens`, `temperature`, `log_level`, `cache_enabled`, `cache_ttl_secs`, `cache_max_entries`, `rate_limit_rps`, `max_sessions`, `session_ttl_hours`, `session_db`, `session_memory_only`.
+**Key flags**: `--provider deepseek|kimi`, `--all-providers`, `--config crabbridge.toml`.
 
-All fields support the `env` attribute. Priority: **CLI > environment variable > default**.
+Priority: **CLI > environment variable > TOML file > defaults**.
 
-### 4.2 `src/state.rs`
+### 4.2 `src/config.rs`
 
-**Shared state**:
+Loads `crabbridge.toml` and resolves the provider map for `serve`:
+
+```toml
+default_provider = "deepseek"
+
+[providers.deepseek]
+api_key = "sk-..."
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-v4-pro"
+
+[providers.kimi]
+api_key = "sk-..."
+base_url = "https://api.kimi.com/coding/v1"
+model = "kimi-for-coding"
+```
+
+If no TOML is present but `DEEPSEEK_API_KEY` and/or `KIMI_API_KEY` are set, providers are auto-discovered from env.
+
+### 4.3 `src/state.rs`
 
 ```rust
+pub struct ProviderRuntime {
+    pub upstream: Url,
+    pub api_key: Arc<String>,
+    pub default_model: Arc<String>,
+    pub model_map: Option<String>,  // per-provider CRABRIDGE_MODEL_MAP override
+    // ...
+}
+
 pub struct AppState {
     pub sessions: SessionStore,
     pub client: Client,
-    pub upstream: Arc<Url>,           // e.g. https://api.deepseek.com/v1
-    pub api_key: Arc<String>,
-    pub default_model: Arc<String>,
-    pub default_max_tokens: Option<u32>,
-    pub default_temperature: Option<f32>,
-    pub upstream_request: Arc<UpstreamRequestConfig>,
-    pub cache: Option<SharedResponseCache>,
+    pub providers: Arc<HashMap<String, ProviderRuntime>>,
+    pub default_provider: Arc<String>,
+    // ...
 }
 ```
 
-### 4.3 `src/handlers.rs`
+### 4.4 `src/handlers.rs`
 
-**Route handlers**:
+**Routes** (see `main.rs` router):
 
 | Handler | Endpoint | Description |
 |---------|----------|-------------|
-| `health` | `GET /health` | Returns `{ "status": "ok" }` |
-| `handle_models` | `GET /v1/models` | Proxies upstream model list |
-| `handle_responses` | `POST /v1/responses` | Core: Responses → Chat → upstream → back to Responses |
+| `health` | `GET /health` | `{ "status": "ok" }` |
+| `api_root_routed` | `GET /{provider}/v1` | Codex reachability probe |
+| `handle_models_routed` | `GET /{provider}/v1/models` | Proxy upstream models + known_models fallback |
+| `handle_responses_routed` | `POST /{provider}/v1/responses` | Core translation path |
+| `*_default` | `GET/POST /v1/*` | Legacy → `default_provider` |
 | `handle_fallback` | `*` | 404 |
 
 **`handle_responses` flow**:
 
-1. Parse `ResponsesRequest` (JSON body)
-2. Load prior messages from `SessionStore` via `previous_response_id`
-3. Convert with `translate::to_chat_request()` → `ChatRequest`
-4. Map model name via `translate::map_model_name()` (includes `CRABRIDGE_MODEL_MAP`)
-5. Non-streaming: POST upstream `/chat/completions`, convert back with `translate::from_chat_response_with_tool_map()`; optionally write to cache
-6. Streaming: delegate to `stream::handle_stream()`, translating Chat SSE to Responses SSE events in real time
+1. Resolve provider slug from path (`deepseek`, `kimi`, …)
+2. Parse `ResponsesRequest`; load history via `SessionStore::get_history(provider, id)`
+3. `translate::to_chat_request()` with per-provider `default_model` and `model_map`
+4. POST upstream `/chat/completions` with that provider's API key
+5. Stream or blocking response back to Responses format
 
-### 4.4 `src/translate.rs`
-
-**Role**: Bidirectional protocol conversion.
-
-**Inbound (Responses → Chat)**:
-- `input` text or message array → `messages[]`
-- `instructions` / `system` → system message
-- `function_call` / `function_call_output` / `reasoning` output items → matching Chat roles and tool_calls
-- Namespace tool names ↔ Chat function names (`NamespaceToolMap`)
-- Replay `reasoning_content` from `SessionStore` (by call_id or turn fingerprint)
-
-**Outbound (Chat → Responses)**:
-- Assistant message → message / function_call items in `output`
-- `reasoning_content` → reasoning summary item
-- Usage field mapping
+### 4.5 `src/translate.rs`
 
 **Model mapping** (`map_model_name`):
-- Read `CRABRIDGE_MODEL_MAP` env var, format `source:target,source2:target2`
-- Model names containing `deepseek` pass through unchanged
-- Other Codex model names (e.g. `gpt-5.4`) fall back to `DEEPSEEK_MODEL`
-
-### 4.5 `src/stream.rs`
-
-**Role**: Translate DeepSeek Chat Completions SSE into Responses API SSE events.
-
-**Output event types** (partial):
-- `response.output_item.added` / `response.output_item.done`
-- `response.output_text.delta`
-- `response.reasoning_summary_text.delta`
-- `response.function_call_arguments.delta`
-- `response.completed`
-
-After the stream ends, persist the turn to `SessionStore` (including reasoning and tool_calls).
+- Per-provider `model_map` from TOML (`[providers.*.model_map]`) or global `[advanced].model_map`
+- Names containing `deepseek` / `kimi` / `moonshot` pass through
+- Other Codex names fall back to the provider's configured default model
 
 ### 4.6 `src/session.rs` + `src/session_sqlite.rs`
 
-**Role**: Maintain multi-turn conversation state for Codex `previous_response_id` continuity.
+Sessions are keyed by **`(provider_slug, response_id)`** so DeepSeek and Kimi histories do not collide.
 
-**In-memory indexes**:
-- `response_id → messages[]` — full conversation history
-- `call_id → reasoning_content` — reasoning tied to tool calls
-- `fingerprint → reasoning_content` — reasoning replay for text-only assistant turns
+SQLite tables: `sessions`, `reasoning`, `turn_reasoning` — composite PK `(provider, …)`.
 
-**Limits and cleanup**:
-- `MAX_SESSIONS` (default 256), `DEFAULT_MAX_SESSION_BYTES` (512 MB), TTL (default 7 days)
-- Background hourly `cleanup()` evicts expired entries
+### 4.7 `src/setup.rs`
 
-**SQLite persistence** (`session_sqlite.rs`):
-- Default path `data/crabbridge.db` (WAL mode, auto-creates parent directory)
-- Tables: `sessions`, `reasoning`, `turn_reasoning`
-- On startup, `load_sqlite_index()` restores in-memory indexes; writes use upsert
-- `SESSION_MEMORY_ONLY=true` skips SQLite (memory only)
+- `setup --all-providers`: writes both Codex entries + multi-provider `crabbridge.toml`
+- `setup --provider kimi`: single provider only
+- `setup --docker`: validates Codex config, catalogs, env keys, and `GET /{slug}/v1` reachability
 
-**Constructors**:
-```rust
-SessionStore::with_limits_and_ttl(max, bytes, ttl)                // memory only
-SessionStore::with_sqlite_limits_and_ttl(path, max, bytes, ttl) // memory + SQLite
-```
+Codex provider names: `crabbridge-deepseek`, `crabbridge-kimi` (see `ProviderKind::codex_provider_name`).
 
-### 4.7 `src/types.rs`
+### 4.8 Other modules
 
-Self-contained Responses API and Chat Completions request/response types (no external OpenAI crate).
-
-Key types: `ResponsesRequest`, `ResponsesInput`, `ResponsesResponse`, `ChatRequest`, `ChatMessage`, `ChatResponse`, `ChatStreamChunk`, etc.
-
-### 4.8 `src/cache.rs`
-
-Non-streaming response cache (moka), keyed by hash of upstream request body. Controlled by `CACHE_ENABLED`.
-
-### 4.9 `src/upstream_request.rs`
-
-Builds JSON body sent to DeepSeek; supports `CRABRIDGE_TOOL_DENYLIST` to filter specific tools.
-
-### 4.10 `src/codex_config.rs`
-
-`print-codex-config` subcommand: queries upstream model list and prints a Codex `config.toml` snippet (`wire_api = "responses"`, `base_url = "http://127.0.0.1:11435/v1"`, etc.).
-
-### 4.11 `src/prompt.rs`
-
-`ResponsesSseParser`: parses `response.output_text.delta` events from Responses SSE for `prompt --stream` text output.
-
-### 4.12 `src/main.rs`
-
-**`run_serve` flow**:
-1. Initialize tracing
-2. Validate upstream URL
-3. Create `SessionStore` (SQLite or memory-only)
-4. Optionally create `ResponseCache`
-5. Build Axum router with CORS and optional rate limit (`tower_governor`)
-6. Start background session cleanup task
-7. `axum::serve` on `bind_addr`
+- **`cache.rs`**: Non-streaming response cache (moka)
+- **`upstream_request.rs`**: Upstream JSON body + `CRABRIDGE_TOOL_DENYLIST`
+- **`codex_config.rs`**: Fetches upstream `/models`, writes `~/.codex/crabbridge-models-{slug}.json`
+- **`prompt.rs`**: `ResponsesSseParser` for CLI streaming output
 
 ---
 
 ## 5. API Endpoints
 
-### 5.1 `POST /v1/responses`
+### 5.1 `POST /{provider}/v1/responses`
 
-**Request**: OpenAI Responses API format (as sent by Codex CLI).
+Primary Codex entry point. Same JSON as OpenAI Responses API.
 
-```json
-{
-  "model": "gpt-5.4",
-  "input": "Hello",
-  "stream": false,
-  "previous_response_id": "resp_xxx"
-}
-```
+### 5.2 `GET /{provider}/v1/models`
 
-**Response**:
-- Non-streaming: Responses JSON (`object: "response"`, `output: [...]`)
-- Streaming: Responses SSE event stream
+Proxies upstream `/models`. On failure, merges provider `known_models` and configured default model so Codex always has catalog entries.
 
-**Errors**: JSON `{ "error": { "message": "...", "type": "..." } }`
+### 5.3 `GET /{provider}/v1`
 
-### 5.2 `GET /v1/models`
+Empty 200 — Codex reachability probe.
 
-Proxies DeepSeek `/v1/models` and returns the model list.
+### 5.4 Legacy `/v1/*`
 
-### 5.3 `GET /health`
+Maps to `default_provider` from config.
+
+### 5.5 `GET /health`
 
 ```json
 { "status": "ok" }
 ```
 
-### 5.4 Unimplemented endpoints
-
-`/v1/chat/completions` **does not exist**. Unknown paths return 404.
-
 ---
 
-## 6. Configuration & Environment Variables
+## 6. Configuration
 
-### 6.1 Required
+### 6.1 TOML (`crabbridge.toml`)
+
+Search order: `--config` / `CRABRIDGE_CONFIG` → `./crabbridge.toml` → `~/.config/crabbridge/config.toml`.
+
+See `crabbridge.example.toml` for the full schema (`[server]`, `[session]`, `[cache]`, `[advanced]`).
+
+### 6.2 Environment variables
 
 | Variable | Description |
 |----------|-------------|
-| `DEEPSEEK_API_KEY` | DeepSeek API key |
+| `DEEPSEEK_API_KEY` | DeepSeek upstream key |
+| `KIMI_API_KEY` | Kimi Code upstream key |
+| `CRABRIDGE_{SLUG}_API_KEY` | Per-provider override from TOML |
+| `BRIDGE_ADDR` | Listen address (default `127.0.0.1:11435`) |
+| `SESSION_DB` | SQLite path (default `data/crabbridge.db`) |
+| `CRABRIDGE_MODEL_MAP` | Global model map (`gpt-5.4:deepseek-v4-pro,…`) |
+| `CRABRIDGE_TOOL_DENYLIST` | Comma-separated tools to block |
 
-### 6.2 Core
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DEEPSEEK_BASE_URL` | Upstream API base URL | `https://api.deepseek.com/v1` |
-| `DEEPSEEK_MODEL` | Default DeepSeek model | `deepseek-chat` |
-| `BRIDGE_ADDR` | Bind address | `127.0.0.1:11435` |
-| `MAX_TOKENS` | Default max_tokens | none |
-| `TEMPERATURE` | Default temperature | none |
-| `LOG_LEVEL` | Log level | `info` |
-
-### 6.3 Session storage
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `MAX_SESSIONS` | Max session count | `256` |
-| `SESSION_TTL_HOURS` | Session TTL (hours) | `168` (7 days) |
-| `SESSION_DB` | SQLite database path | `data/crabbridge.db` |
-| `SESSION_MEMORY_ONLY` | Disable SQLite, memory only | `false` |
-
-### 6.4 Optional features
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `CRABRIDGE_MODEL_MAP` | Codex→DeepSeek model mapping | none |
-| `CRABRIDGE_TOOL_DENYLIST` | Tool names to block (comma-separated) | none |
-| `CACHE_ENABLED` | Enable response cache | `false` |
-| `CACHE_TTL_SECS` | Cache TTL (seconds) | `300` |
-| `CACHE_MAX_ENTRIES` | Max cache entries | `1000` |
-| `RATE_LIMIT_RPS` | Global rate limit (RPS; 0 = disabled) | `0` |
+Codex still needs `DEEPSEEK_API_KEY` / `KIMI_API_KEY` in the **shell** (`env_key` in Codex config) — separate from bridge TOML.
 
 ---
 
 ## 7. CLI
 
 ```bash
-crabridge [COMMAND] [OPTIONS]
+crabridge serve
+crabridge setup --all-providers
+crabridge setup --docker
+crabridge prompt "Hello" --provider deepseek
+crabridge print-codex-config --provider kimi
+crabridge print-codex-config --all-providers
 ```
-
-### 7.1 `serve`
-
-```bash
-crabridge serve --api-key sk-xxx --model deepseek-chat -b 127.0.0.1:11435
-SESSION_DB=/tmp/crab.db crabridge serve
-SESSION_MEMORY_ONLY=true crabridge serve   # memory only, no persistence
-```
-
-### 7.2 `prompt`
-
-```bash
-crabridge prompt "Hello"
-crabridge prompt "Hello" --stream
-```
-
-Sends a test request to `http://{BRIDGE_ADDR}/v1/responses`.
-
-### 7.3 `print-codex-config`
-
-```bash
-crabridge print-codex-config --api-key sk-xxx
-```
-
-Prints a config snippet ready to paste into Codex `config.toml`.
 
 ---
 
 ## 8. Codex Integration
 
-Example Codex CLI config (generated by `print-codex-config`):
+Example (multi-provider):
 
 ```toml
-[model_providers.crabbridge]
-name = "crabbridge"
-base_url = "http://127.0.0.1:11435/v1"
+model_provider = "crabbridge-deepseek"
+model = "deepseek-v4-pro"
+model_catalog_json = "/Users/you/.codex/crabbridge-models-deepseek.json"
+
+[model_providers.crabbridge-deepseek]
+name = "crabbridge-deepseek"
+base_url = "http://127.0.0.1:11435/deepseek/v1"
 wire_api = "responses"
 env_key = "DEEPSEEK_API_KEY"
+
+[model_providers.crabbridge-kimi]
+name = "crabbridge-kimi"
+base_url = "http://127.0.0.1:11435/kimi/v1"
+wire_api = "responses"
+env_key = "KIMI_API_KEY"
 ```
 
-Startup order:
-1. Run `crabridge serve` (ensure API key is configured)
-2. Use the `crabbridge` provider in Codex
+Switch providers in Codex by changing `model_provider`, `model`, and `model_catalog_json`.
 
 ---
 
 ## 9. Build & Run
 
 ```bash
-# Build
 cargo build --release
-
-# Run (reads crabbridge.toml)
-cargo run -- serve
-
-# Test
+cargo run -- serve          # reads crabbridge.toml
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
@@ -373,32 +299,21 @@ cargo clippy --all-targets -- -D warnings
 
 ### 10.1 Unit tests
 
-In-module `#[cfg(test)]` blocks covering:
-- Responses ↔ Chat conversion (`translate.rs`)
-- Session store and SQLite round-trip (`session.rs`, `session_sqlite.rs`)
-- SSE parsing (`prompt.rs`)
-- Model mapping, tool name splitting, namespace mapping
+Conversion, sessions (per-provider isolation), config resolution, setup checks, provider routing.
 
 ### 10.2 Integration tests (`tests/integration.rs`)
 
-Uses mockito to mock the DeepSeek upstream:
-- `GET /health`
-- `POST /v1/responses` non-streaming translation
-- `POST /v1/responses` streaming SSE translation
-- `GET /v1/models` proxy
-
-Integration tests use in-memory `SessionStore` only (no SQLite file dependency).
+Uses mockito; exercises `/deepseek/v1/responses`, `/deepseek/v1/models`, and legacy `/v1/responses`.
 
 ---
 
 ## 11. Design Constraints & Notes
 
-- **Protocol**: Responses API inbound only; outbound is always Chat Completions. No Chat Completions passthrough.
-- **Security**: API keys via env or CLI only; never hardcode.
-- **Performance**: Async I/O; Reqwest connection pooling; SQLite WAL mode.
-- **Error handling**: Upstream errors forwarded or wrapped as Responses-style JSON; avoid panics.
+- **Routing**: Provider is determined by URL path, not by guessing from model name.
+- **Protocol**: Responses API inbound only; outbound is always Chat Completions.
+- **Security**: API keys via env or TOML only; never hardcode.
+- **Sessions**: Scoped by provider slug in SQLite and memory.
 - **CORS**: `CorsLayer::permissive()`.
-- **Data directory**: `data/` is listed in `.gitignore`.
 
 ---
 
@@ -416,6 +331,7 @@ tower_governor = "0.8"
 tracing = "0.1"
 tracing-subscriber = "0.3"  # features: env-filter
 toml = "0.8"
+toml_edit = "0.22"
 anyhow = "1"
 thiserror = "2"
 futures-util = "0.3"
@@ -429,4 +345,4 @@ rusqlite = "0.32"         # features: bundled
 
 ---
 
-**End of Agent Spec**. Use this document to understand CrabBridge's Responses-only architecture and maintain or extend the codebase correctly.
+**End of Agent Spec**. Use this document to understand CrabBridge's path-routed, multi-provider Responses bridge and maintain or extend the codebase correctly.

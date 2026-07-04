@@ -25,6 +25,7 @@ pub struct StreamArgs {
     pub chat_req: ChatRequest,
     pub upstream_request: Arc<UpstreamRequestConfig>,
     pub response_id: String,
+    pub provider: String,
     pub sessions: SessionStore,
     /// The fully translated request messages (including replayed history).
     /// Used to save correct session history so turn-level reasoning can be
@@ -72,6 +73,7 @@ pub fn translate_stream(
         chat_req,
         upstream_request,
         response_id,
+        provider,
         sessions,
         request_messages,
         namespace_tools,
@@ -413,7 +415,7 @@ pub fn translate_stream(
             // back when Codex replays function_call items in the next request.
             for tc in tool_calls.values() {
                 if !tc.id.is_empty() {
-                    sessions.store_reasoning(tc.id.clone(), accumulated_reasoning.clone());
+                    sessions.store_reasoning(&provider, tc.id.clone(), accumulated_reasoning.clone());
                 }
             }
 
@@ -438,14 +440,14 @@ pub fn translate_stream(
             // Index reasoning by turn fingerprint so it can be recovered when
             // Codex replays the full conversation in input[] without previous_response_id.
             if !accumulated_reasoning.is_empty() {
-                sessions.store_turn_reasoning(&request_messages, &assistant_msg, accumulated_reasoning.clone());
+                sessions.store_turn_reasoning(&provider, &request_messages, &assistant_msg, accumulated_reasoning.clone());
             }
 
             // Save the full request conversation (including current input items)
             // so that history is complete for the next turn.
             let mut messages = request_messages;
             messages.push(assistant_msg);
-            sessions.save_with_id(response_id.clone(), messages);
+            sessions.save_with_id(&provider, response_id.clone(), messages);
 
             // Build output array for response.completed
             let mut indexed_output_items: Vec<(usize, Value)> = Vec::new();

@@ -6,8 +6,15 @@ CrabBridge accepts Responses API requests from Codex, converts them to upstream 
 
 ```
 Codex CLI  ──Responses API──▶  CrabBridge  ──Chat Completions──▶  DeepSeek / Kimi Code
-              /v1/responses              /v1/chat/completions
+         /{provider}/v1/responses              /v1/chat/completions
 ```
+
+One `crabridge serve` process can host **multiple upstream providers** at once. Codex selects the upstream via `base_url` path:
+
+- `http://127.0.0.1:11435/deepseek/v1`
+- `http://127.0.0.1:11435/kimi/v1`
+
+Legacy `/v1/*` routes still work and map to `default_provider`.
 
 ## Features
 
@@ -35,21 +42,16 @@ cp crabbridge.example.toml crabbridge.toml
 cargo run -- serve
 ```
 
-### Kimi Code (`kimi-for-coding`)
-
-Uses the Kimi Code OpenAI-compatible endpoint (membership / coding agents):
+### Multi-provider (recommended)
 
 ```bash
-# in crabbridge.toml:
-# provider = "kimi"
-# [upstream]
-# api_key = "sk-xxx"
-# base_url = "https://api.kimi.com/coding/v1"
-# model = "kimi-for-coding"
+cp crabbridge.example.toml crabbridge.toml
+# fill [providers.deepseek] and [providers.kimi] api_key values
+cargo run -- setup --all-providers   # writes Codex + crabbridge.toml
 cargo run -- serve
 ```
 
-Or one-shot:
+### Single provider
 
 ```bash
 cargo run -- setup --provider kimi --api-key sk-xxx
@@ -105,38 +107,39 @@ $env:DEEPSEEK_API_KEY = "sk-xxx"
    crabridge serve
    ```
 
-2. Generate a Codex provider snippet (also writes `~/.codex/crabbridge-models.json`):
+2. Generate Codex provider snippets (writes `~/.codex/crabbridge-models-{provider}.json`):
 
    ```bash
-   # DeepSeek
-   crabridge print-codex-config --model deepseek-v4-pro
+   # both providers
+   crabridge setup --all-providers
 
-   # Kimi Code
-   CRABRIDGE_PROVIDER=kimi crabridge print-codex-config
+   # or one at a time
+   crabridge print-codex-config --provider deepseek
+   crabridge print-codex-config --provider kimi
    ```
 
-3. Paste the printed TOML into `~/.codex/config.toml`. Minimal form:
+3. Paste into `~/.codex/config.toml`. Multi-provider form:
 
    ```toml
-   model_provider = "crabbridge"
-   model = "kimi-for-coding"   # or deepseek-v4-pro
-   model_catalog_json = "/Users/YOU/.codex/crabbridge-models.json"
+   model_provider = "crabbridge-deepseek"
+   model = "deepseek-v4-pro"
+   model_catalog_json = "/Users/YOU/.codex/crabbridge-models-deepseek.json"
 
-   [model_providers.crabbridge]
-   name = "crabbridge"
-   base_url = "http://127.0.0.1:11435/v1"
+   [model_providers.crabbridge-deepseek]
+   name = "crabbridge-deepseek"
+   base_url = "http://127.0.0.1:11435/deepseek/v1"
    wire_api = "responses"
-   env_key = "KIMI_API_KEY"   # or DEEPSEEK_API_KEY
+   env_key = "DEEPSEEK_API_KEY"
+
+   [model_providers.crabbridge-kimi]
+   name = "crabbridge-kimi"
+   base_url = "http://127.0.0.1:11435/kimi/v1"
+   wire_api = "responses"
+   env_key = "KIMI_API_KEY"
+   model_catalog_json = "/Users/YOU/.codex/crabbridge-models-kimi.json"
    ```
 
-   Codex **0.105+ ignores `[model_properties.*]`**. Metadata must come from
-   `model_catalog_json` (a full model catalog JSON). Without it you will see:
-   `Model metadata for ... not found`.
-
-   Note: setting `model_catalog_json` replaces Codex's remote OpenAI model list
-   for this config — only models in that file are available.
-
-4. Restart Codex and select the `crabbridge` provider.
+   Switch providers in Codex by changing `model_provider` (and `model`).
 
 ## Configuration
 
@@ -151,43 +154,25 @@ Priority: **CLI flags > environment variables > TOML file > defaults**.
 Copy `crabbridge.example.toml` to `crabbridge.toml`, or run `crabridge setup`.
 
 ```toml
-provider = "deepseek"   # or "kimi"
+default_provider = "deepseek"
 
-[upstream]
-api_key = "sk-your-api-key-here"
-# base_url = "https://api.deepseek.com/v1"
-# model = "deepseek-v4-pro"
+[providers.deepseek]
+api_key = "sk-your-deepseek-key"
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-v4-pro"
+
+[providers.kimi]
+api_key = "sk-your-kimi-code-key"
+base_url = "https://api.kimi.com/coding/v1"
+model = "kimi-for-coding"
 
 [server]
 bind_addr = "127.0.0.1:11435"
-log_level = "info"
-
-[session]
-db = "data/crabbridge.db"
-memory_only = false
-
-[cache]
-enabled = false
-
-[rate_limit]
-rps = 0
-
-# [advanced]
-# model_map = "gpt-5.4:deepseek-v4-pro"
-# tool_denylist = "spawn_agent,wait_agent"
 ```
 
-**Kimi Code defaults** (`provider = "kimi"`):
+SQLite session/reasoning rows are scoped by `provider` so Kimi and DeepSeek histories do not mix.
 
-| Setting | Value |
-|---------|-------|
-| Base URL | `https://api.kimi.com/coding/v1` |
-| Model | `kimi-for-coding` |
-| Codex `env_key` | `KIMI_API_KEY` |
-
-Codex still needs `DEEPSEEK_API_KEY` / `KIMI_API_KEY` in the **shell** environment (`env_key` in `~/.codex/config.toml`). That is separate from the bridge TOML.
-
-Environment variables (`UPSTREAM_API_KEY`, `BRIDGE_ADDR`, …) remain supported as overrides.
+Legacy single-provider TOML (`provider` + `[upstream]`) is still supported.
 
 ## CLI
 
@@ -197,7 +182,9 @@ crabridge setup                  # Write Codex + crabbridge.toml
 crabridge setup --docker         # Check current configuration
 crabridge prompt "Hello"         # Send a test request
 crabridge prompt "Hello" --stream
-crabridge print-codex-config     # Print Codex config snippet only
+crabridge setup --all-providers # Configure deepseek + kimi at once
+crabridge prompt "Hello" --provider kimi
+crabridge print-codex-config --all-providers
 ```
 
 ## API Endpoints
@@ -205,8 +192,9 @@ crabridge print-codex-config     # Print Codex config snippet only
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
-| `GET` | `/v1/models` | Proxy DeepSeek model list |
-| `POST` | `/v1/responses` | Responses API (Codex entry point) |
+| `GET` | `/{provider}/v1/models` | Proxy upstream model list |
+| `POST` | `/{provider}/v1/responses` | Responses API (Codex entry point) |
+| `GET/POST` | `/v1/*` | Legacy routes → `default_provider` |
 
 `/v1/chat/completions` is **not** exposed on the bridge.
 

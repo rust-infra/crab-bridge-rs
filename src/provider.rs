@@ -23,6 +23,9 @@ impl ProviderKind {
 
     pub fn from_base_url(base_url: &str) -> Self {
         let lower = base_url.to_ascii_lowercase();
+        if let Some(route) = bridge_route_from_url(base_url) {
+            return Self::parse(route);
+        }
         if lower.contains("deepseek") {
             Self::DeepSeek
         } else if lower.contains("api.kimi.com/coding")
@@ -33,6 +36,36 @@ impl ProviderKind {
         } else {
             Self::Custom
         }
+    }
+
+    /// Route slug used in `http://host/{slug}/v1` and `[providers.{slug}]`.
+    pub fn route_slug(self) -> &'static str {
+        match self {
+            Self::DeepSeek => "deepseek",
+            Self::Kimi => "kimi",
+            Self::Custom => "custom",
+        }
+    }
+
+    /// Parse a bridge route segment (`deepseek`, `kimi`, …).
+    pub fn from_route(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "deepseek" | "ds" => Some(Self::DeepSeek),
+            "kimi" | "kimi-code" | "kimi-for-coding" | "coding" | "moonshot" | "moonshot-ai" => {
+                Some(Self::Kimi)
+            }
+            "custom" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+
+    /// Codex `model_providers` table name for a route slug.
+    pub fn codex_provider_name(slug: &str) -> String {
+        format!("crabbridge-{slug}")
+    }
+
+    pub fn builtin_slugs() -> &'static [&'static str] {
+        &["deepseek", "kimi"]
     }
 
     pub fn default_base_url(self) -> &'static str {
@@ -181,6 +214,23 @@ fn alias_first(target: &str, sources: &[&str]) {
     }
 }
 
+/// Extract provider route slug from a bridge `base_url` path (e.g. `/kimi/v1`).
+fn bridge_route_from_url(base_url: &str) -> Option<&str> {
+    let trimmed = base_url.trim_end_matches('/');
+    let path = trimmed
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.find('/').map(|idx| &rest[idx..]))?;
+    let mut segments: Vec<&str> = path.split('/').filter(|seg| !seg.is_empty()).collect();
+    if segments.last() == Some(&"v1") {
+        segments.pop();
+    }
+    match segments.as_slice() {
+        [slug] if ProviderKind::from_route(slug).is_some() => Some(*slug),
+        _ => None,
+    }
+}
+
 fn set_if_missing(key: &str, value: &str) {
     if env::var_os(key).is_none() {
         // SAFETY: called once at process start before other threads spawn.
@@ -213,6 +263,23 @@ mod tests {
         assert_eq!(
             ProviderKind::from_base_url("https://api.deepseek.com/v1"),
             ProviderKind::DeepSeek
+        );
+        assert_eq!(
+            ProviderKind::from_base_url("http://127.0.0.1:11435/kimi/v1"),
+            ProviderKind::Kimi
+        );
+        assert_eq!(
+            ProviderKind::from_base_url("http://127.0.0.1:11435/deepseek/v1"),
+            ProviderKind::DeepSeek
+        );
+    }
+
+    #[test]
+    fn route_slug_and_codex_name() {
+        assert_eq!(ProviderKind::DeepSeek.route_slug(), "deepseek");
+        assert_eq!(
+            ProviderKind::codex_provider_name("kimi"),
+            "crabbridge-kimi"
         );
     }
 

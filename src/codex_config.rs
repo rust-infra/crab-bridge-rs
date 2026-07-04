@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use std::net::SocketAddr;
+
 use reqwest::{Client, Url};
 use serde_json::{json, Value};
 
@@ -46,13 +48,15 @@ pub async fn print_codex_config(
     api_key: &str,
     provider_name: &str,
     default_model: &str,
+    bind_addr: &SocketAddr,
+    route_slug: &str,
 ) {
     let kind = ProviderKind::from_base_url(upstream.as_str());
     let models = prepare_model_catalog(client, upstream, api_key, kind, default_model).await;
 
     let preferred = preferred_model(&models, kind, default_model);
 
-    let catalog_path = default_catalog_path();
+    let catalog_path = catalog_path_for_slug(route_slug);
     match write_model_catalog(&catalog_path, &models) {
         Ok(()) => {
             eprintln!(
@@ -70,6 +74,7 @@ pub async fn print_codex_config(
     }
 
     let env_key = kind.codex_env_key();
+    let bridge_base_url = format!("http://{bind_addr}/{route_slug}/v1");
     println!(
         "# ── Codex config snippet for CrabBridge + {} ──",
         kind.label()
@@ -86,7 +91,7 @@ pub async fn print_codex_config(
     println!();
     println!("[model_providers.{provider_name}]");
     println!("name = \"{provider_name}\"");
-    println!("base_url = \"http://127.0.0.1:11435/v1\"");
+    println!("base_url = \"{bridge_base_url}\"");
     println!("wire_api = \"responses\"");
     println!("env_key = \"{env_key}\"");
     println!();
@@ -177,10 +182,14 @@ fn known_models_for(kind: ProviderKind, default_model: &str) -> Vec<String> {
     models
 }
 
-pub fn default_catalog_path() -> PathBuf {
+pub fn catalog_path_for_slug(slug: &str) -> PathBuf {
     codex_home_dir()
-        .map(|h| h.join("crabbridge-models.json"))
-        .unwrap_or_else(|| PathBuf::from("crabbridge-models.json"))
+        .map(|h| h.join(format!("crabbridge-models-{slug}.json")))
+        .unwrap_or_else(|| PathBuf::from(format!("crabbridge-models-{slug}.json")))
+}
+
+pub fn default_catalog_path() -> PathBuf {
+    catalog_path_for_slug("deepseek")
 }
 
 pub fn codex_home_dir() -> Option<PathBuf> {

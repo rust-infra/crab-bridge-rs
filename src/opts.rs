@@ -34,10 +34,12 @@ pub enum Commands {
         bind_addr: SocketAddr,
         #[arg(long, env = "UPSTREAM_MODEL", default_value = "deepseek-v4-pro")]
         model: String,
+        #[arg(long, env = "CRABRIDGE_PROVIDER", default_value = "deepseek")]
+        provider: String,
     },
     /// Print a Codex config.toml snippet for the configured upstream via CrabBridge
     PrintCodexConfig {
-        #[arg(long, env = "UPSTREAM_API_KEY")]
+        #[arg(long, env = "UPSTREAM_API_KEY", default_value = "")]
         api_key: String,
         #[arg(
             long,
@@ -54,6 +56,10 @@ pub enum Commands {
             default_value = "127.0.0.1:11435"
         )]
         bind_addr: SocketAddr,
+        #[arg(long, env = "CRABRIDGE_PROVIDER", default_value = "deepseek")]
+        provider: String,
+        #[arg(long, help = "Print Codex snippets for deepseek + kimi")]
+        all_providers: bool,
     },
     /// Write Codex config, model catalog, and optional bridge TOML config in one step
     Setup(SetupArgs),
@@ -90,25 +96,24 @@ pub struct SetupArgs {
     /// Check current Codex + bridge configuration (read-only, no writes)
     #[arg(long)]
     pub docker: bool,
+    /// Setup Codex entries for deepseek + kimi in one run
+    #[arg(long)]
+    pub all_providers: bool,
 }
 
 #[derive(Parser, Debug)]
 pub struct ServeArgs {
     /// Upstream API key. Also accepts DEEPSEEK_API_KEY / MOONSHOT_API_KEY / KIMI_API_KEY.
-    #[arg(long, env = "UPSTREAM_API_KEY")]
+    #[arg(long, env = "UPSTREAM_API_KEY", default_value = "")]
     pub api_key: String,
-    /// Upstream Chat Completions base URL.
+    /// Upstream Chat Completions base URL (overrides default provider only).
     /// DeepSeek: https://api.deepseek.com/v1
     /// Kimi Code: https://api.kimi.com/coding/v1
-    #[arg(
-        long,
-        env = "UPSTREAM_BASE_URL",
-        default_value = "https://api.deepseek.com/v1"
-    )]
-    pub base_url: String,
-    /// Default upstream model when Codex sends an unmapped model name.
-    #[arg(long, env = "UPSTREAM_MODEL", default_value = "deepseek-v4-pro")]
-    pub model: String,
+    #[arg(long, env = "UPSTREAM_BASE_URL")]
+    pub base_url: Option<String>,
+    /// Default upstream model for the default provider when Codex sends an unmapped name.
+    #[arg(long, env = "UPSTREAM_MODEL")]
+    pub model: Option<String>,
     #[arg(
         short = 'b',
         long,

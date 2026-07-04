@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,22 +23,23 @@ use tracing_subscriber::EnvFilter;
 
 use crab_bridge_rs::cache::ResponseCache;
 use crab_bridge_rs::codex_config::print_codex_config;
-use crab_bridge_rs::config::{config_path_from_args, load_config_into_env};
+use crab_bridge_rs::config::{
+    ServeOverrides, config_path_from_args, load_config_file, load_config_into_env,
+    resolve_config_path, resolve_serve_providers,
+};
 use crab_bridge_rs::handlers::{
-    api_root, handle_fallback, handle_models, handle_responses, health,
+    api_root_default, api_root_routed, handle_fallback, handle_models_default,
+    handle_models_routed, handle_responses_default, handle_responses_routed, health,
 };
 use crab_bridge_rs::opts::{Cli, Commands, ServeArgs, SetupArgs};
 use crab_bridge_rs::prompt::ResponsesSseParser;
-use crab_bridge_rs::provider::{bootstrap_upstream_env, ProviderKind};
+use crab_bridge_rs::provider::{ProviderKind, bootstrap_upstream_env};
 use crab_bridge_rs::setup::{self, SetupOptions, print_setup_summary};
-use crab_bridge_rs::state::AppState;
+use crab_bridge_rs::state::{AppState, ProviderRuntime};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load crabbridge.toml (or --config / CRABRIDGE_CONFIG) into env before Clap.
-    // Priority: CLI flags > existing env > TOML config > defaults.
     load_config_into_env(config_path_from_args())?;
-    // Map DEEPSEEK_* / MOONSHOT_* / KIMI_* and CRABRIDGE_PROVIDER into UPSTREAM_*.
     bootstrap_upstream_env();
 
     let cli = Cli::parse();
@@ -49,19 +51,25 @@ async fn main() -> Result<()> {
             stream,
             bind_addr,
             model,
-        } => run_prompt(message, stream, bind_addr, model).await,
+            provider,
+        } => run_prompt(message, stream, bind_addr, model, provider).await,
         Commands::PrintCodexConfig {
             api_key,
             base_url,
             model,
             bind_addr,
-        } => run_print_codex_config(api_key, base_url, model, bind_addr).await,
+            provider,
+            all_providers,
+        } => {
+            run_print_codex_config(api_key, base_url, model, bind_addr, provider, all_providers)
+                .await
+        }
         Commands::Setup(args) => run_setup(args).await,
     }
 }
 
-async fn run_serve(
-    ServeArgs {
+async fn run_serve(serve: ServeArgs) -> Result<()> {
+    let ServeArgs {
         api_key,
         base_url,
         model,
@@ -77,13 +85,57 @@ async fn run_serve(
         session_ttl_hours,
         session_db,
         session_memory_only,
-    }: ServeArgs,
-) -> Result<()> {
+    } = serve;
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
 
-    let upstream = validate_upstream(&base_url)?;
+    let cfg = resolve_config_path(config_path_from_args())
+        .and_then(|path| load_config_file(&path).ok());
+    let resolved = resolve_serve_providers(
+        cfg.as_ref(),
+        &ServeOverrides {
+            api_key: (!api_key.is_empty()).then_some(api_key),
+            base_url,
+            model,
+        },
+    )?;
+
+    let mut providers = HashMap::new();
+    for (slug, entry) in &resolved.providers {
+        if entry.api_key.is_empty() {
+            tracing::warn!(provider = %slug, "skipping provider with no API key");
+            continue;
+        }
+        let upstream = validate_upstream(&entry.base_url)?;
+        providers.insert(
+            slug.clone(),
+            ProviderRuntime {
+                upstream,
+                api_key: Arc::new(entry.api_key.clone()),
+                default_model: Arc::new(entry.model.clone()),
+                default_max_tokens: max_tokens,
+                default_temperature: temperature,
+                model_map: entry.model_map.clone(),
+            },
+        );
+    }
+
+    if providers.is_empty() {
+        bail!("no providers with API keys configured");
+    }
+
+    let default_provider = if providers.contains_key(&resolved.default_provider) {
+        resolved.default_provider
+    } else {
+        providers
+            .keys()
+            .next()
+            .cloned()
+            .context("no default provider available")?
+    };
+
     let upstream_request = Arc::new(UpstreamRequestConfig::default());
     let client = Client::new();
     let session_ttl = Duration::from_secs(session_ttl_hours.saturating_mul(60 * 60));
@@ -115,14 +167,12 @@ async fn run_serve(
         None
     };
 
+    let default_provider = Arc::new(default_provider);
     let state = AppState {
         sessions: sessions.clone(),
         client,
-        upstream: Arc::new(upstream),
-        api_key: Arc::new(api_key),
-        default_model: Arc::new(model.clone()),
-        default_max_tokens: max_tokens,
-        default_temperature: temperature,
+        providers: Arc::new(providers),
+        default_provider: default_provider.clone(),
         upstream_request,
         cache,
     };
@@ -137,9 +187,12 @@ async fn run_serve(
 
     let mut app = Router::new()
         .route("/health", get(health))
-        .route("/v1", get(api_root))
-        .route("/v1/responses", post(handle_responses))
-        .route("/v1/models", get(handle_models))
+        .route("/v1", get(api_root_default))
+        .route("/v1/responses", post(handle_responses_default))
+        .route("/v1/models", get(handle_models_default))
+        .route("/{provider}/v1", get(api_root_routed))
+        .route("/{provider}/v1/responses", post(handle_responses_routed))
+        .route("/{provider}/v1/models", get(handle_models_routed))
         .fallback(handle_fallback)
         .layer(DefaultBodyLimit::disable())
         .layer(CorsLayer::permissive())
@@ -162,12 +215,11 @@ async fn run_serve(
         .await
         .with_context(|| format!("failed to bind to {bind_addr}"))?;
 
-    let provider = ProviderKind::from_base_url(&base_url);
+    let provider_list: Vec<_> = resolved.providers.keys().cloned().collect();
     info!(
         %bind_addr,
-        provider = provider.label(),
-        model = %model,
-        upstream = %base_url,
+        default_provider = %default_provider,
+        providers = ?provider_list,
         cache_enabled,
         "CrabBridge listening for Codex Responses API"
     );
@@ -184,6 +236,7 @@ async fn run_prompt(
     stream: bool,
     bind_addr: SocketAddr,
     model: String,
+    provider: String,
 ) -> Result<()> {
     let request = serde_json::json!({
         "model": model,
@@ -191,7 +244,7 @@ async fn run_prompt(
         "stream": stream,
     });
 
-    let url = format!("http://{bind_addr}/v1/responses");
+    let url = format!("http://{bind_addr}/{provider}/v1/responses");
     let client = Client::new();
 
     if stream {
@@ -248,10 +301,52 @@ async fn run_print_codex_config(
     base_url: String,
     model: String,
     bind_addr: SocketAddr,
+    provider: String,
+    all_providers: bool,
 ) -> Result<()> {
-    let upstream = validate_upstream(&base_url)?;
     let client = Client::new();
-    print_codex_config(&client, &upstream, &api_key, "crabbridge", &model).await;
+
+    if all_providers {
+        for slug in ProviderKind::builtin_slugs() {
+            let kind = ProviderKind::from_route(slug).unwrap_or(ProviderKind::Custom);
+            let upstream = validate_upstream(
+                &std::env::var(format!(
+                    "CRABRIDGE_{}_BASE_URL",
+                    slug.to_ascii_uppercase()
+                ))
+                .unwrap_or_else(|_| kind.default_base_url().to_string()),
+            )?;
+            let key = std::env::var(format!("CRABRIDGE_{}_API_KEY", slug.to_ascii_uppercase()))
+                .or_else(|_| std::env::var("UPSTREAM_API_KEY"))
+                .unwrap_or(api_key.clone());
+            let model_name = std::env::var(format!("CRABRIDGE_{}_MODEL", slug.to_ascii_uppercase()))
+                .unwrap_or_else(|_| kind.default_model().to_string());
+            print_codex_config(
+                &client,
+                &upstream,
+                &key,
+                &ProviderKind::codex_provider_name(slug),
+                &model_name,
+                &bind_addr,
+                slug,
+            )
+            .await;
+        }
+    } else {
+        let kind = ProviderKind::parse(&provider);
+        let upstream = validate_upstream(&base_url)?;
+        print_codex_config(
+            &client,
+            &upstream,
+            &api_key,
+            &ProviderKind::codex_provider_name(kind.route_slug()),
+            &model,
+            &bind_addr,
+            kind.route_slug(),
+        )
+        .await;
+    }
+
     eprintln!("// CrabBridge bind address: http://{bind_addr}");
     Ok(())
 }
@@ -267,15 +362,29 @@ async fn run_setup(
         force_config,
         config,
         docker,
+        all_providers,
     }: SetupArgs,
 ) -> Result<()> {
-    let provider_kind = ProviderKind::parse(&provider);
-
     if docker {
-        let resolved_key = setup::resolve_api_key(provider_kind, api_key)?;
+        let slugs: Vec<String> = if all_providers {
+            ProviderKind::builtin_slugs()
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect()
+        } else if config.is_file() {
+            load_config_file(&config)
+                .ok()
+                .filter(|cfg| !cfg.providers.is_empty())
+                .map(|cfg| cfg.providers.keys().cloned().collect())
+                .unwrap_or_else(|| {
+                    vec![ProviderKind::parse(&provider).route_slug().to_string()]
+                })
+        } else {
+            vec![ProviderKind::parse(&provider).route_slug().to_string()]
+        };
         setup::run_setup_check(setup::SetupCheckOptions {
-            provider: provider_kind,
-            api_key: resolved_key,
+            provider_slugs: slugs,
+            api_key,
             bridge_config_path: config,
             bind_addr,
         })
@@ -283,21 +392,32 @@ async fn run_setup(
         return Ok(());
     }
 
-    let resolved_key = setup::resolve_api_key(provider_kind, api_key)?;
+    let slugs: Vec<&str> = if all_providers {
+        ProviderKind::builtin_slugs().to_vec()
+    } else {
+        vec![ProviderKind::parse(&provider).route_slug()]
+    };
 
-    let result = setup::run_setup(SetupOptions {
-        provider: provider_kind,
-        api_key: resolved_key,
-        base_url,
-        model,
-        bind_addr,
-        write_bridge_config: !codex_only,
-        bridge_config_path: config,
-        force_bridge_config: force_config,
-    })
-    .await?;
+    for (idx, slug) in slugs.iter().enumerate() {
+        let provider_kind = ProviderKind::from_route(slug).unwrap_or(ProviderKind::Custom);
+        let resolved_key = setup::resolve_api_key(provider_kind, api_key.clone())?;
+        let result = setup::run_setup(SetupOptions {
+            provider: provider_kind,
+            provider_slug: (*slug).to_string(),
+            api_key: resolved_key,
+            base_url: base_url.clone(),
+            model: model.clone(),
+            bind_addr,
+            write_bridge_config: !codex_only && !all_providers,
+            write_multi_bridge_config: !codex_only && all_providers && idx == 0,
+            bridge_config_path: config.clone(),
+            force_bridge_config: force_config,
+            set_active_codex_provider: !all_providers || idx + 1 == slugs.len(),
+        })
+        .await?;
+        print_setup_summary(&result);
+    }
 
-    print_setup_summary(&result);
     Ok(())
 }
 

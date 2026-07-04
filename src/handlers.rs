@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use axum::{
     Json,
-    extract::{Request, State},
+    extract::{Path, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -12,7 +12,8 @@ use serde_json::json;
 use tracing::{debug, error, info, warn};
 
 use crate::cache::ResponseCache;
-use crate::state::AppState;
+use crate::provider::ProviderKind;
+use crate::state::{AppState, ProviderRuntime};
 use crate::stream::{self, StreamArgs};
 use crate::translate;
 use crate::types::*;
@@ -32,17 +33,47 @@ pub async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
 }
 
-/// Codex probes `HEAD/GET {base_url}` for reachability (e.g. `http://127.0.0.1:11435/v1`).
-pub async fn api_root() -> impl IntoResponse {
-    StatusCode::OK
+/// Codex probes `HEAD/GET {base_url}` for reachability (e.g. `http://127.0.0.1:11435/kimi/v1`).
+pub async fn api_root_default(State(state): State<AppState>) -> impl IntoResponse {
+    api_root_for_provider(&state, state.default_provider.as_str()).await
 }
 
-pub async fn handle_models(State(state): State<AppState>) -> Response {
-    info!("GET /v1/models");
-    let url = format!("{}models", join_base(&state.upstream));
+pub async fn api_root_routed(
+    State(state): State<AppState>,
+    Path(provider): Path<String>,
+) -> impl IntoResponse {
+    api_root_for_provider(&state, &provider).await
+}
+
+async fn api_root_for_provider(state: &AppState, provider: &str) -> Response {
+    if state.provider(provider).is_some() {
+        StatusCode::OK.into_response()
+    } else {
+        (StatusCode::NOT_FOUND, format!("unknown provider: {provider}")).into_response()
+    }
+}
+
+pub async fn handle_models_default(State(state): State<AppState>) -> Response {
+    let provider = state.default_provider.clone();
+    handle_models_inner(state, provider.as_str()).await
+}
+
+pub async fn handle_models_routed(
+    State(state): State<AppState>,
+    Path(provider): Path<String>,
+) -> Response {
+    handle_models_inner(state, &provider).await
+}
+
+async fn handle_models_inner(state: AppState, provider: &str) -> Response {
+    let Some(runtime) = state.provider(provider) else {
+        return (StatusCode::NOT_FOUND, format!("unknown provider: {provider}")).into_response();
+    };
+    info!(provider, "GET /{provider}/v1/models");
+    let url = format!("{}models", join_base(&runtime.upstream));
     let mut builder = state.client.get(&url);
-    if !state.api_key.is_empty() {
-        builder = builder.bearer_auth(state.api_key.as_str());
+    if !runtime.api_key.is_empty() {
+        builder = builder.bearer_auth(runtime.api_key.as_str());
     }
 
     let upstream_body: Option<serde_json::Value> = match builder.send().await {
@@ -63,12 +94,36 @@ pub async fn handle_models(State(state): State<AppState>) -> Response {
         }
     };
 
-    let list = upstream_body
+    let mut list = upstream_body
         .as_ref()
         .and_then(|b| b.get("data").or_else(|| b.get("models")))
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+
+    let mut seen: HashSet<String> = list
+        .iter()
+        .filter_map(|item| item.get("id").and_then(|v| v.as_str()).map(String::from))
+        .collect();
+
+    let kind = ProviderKind::from_route(provider).unwrap_or(ProviderKind::Custom);
+    for known in kind.known_models() {
+        if seen.insert((*known).to_string()) {
+            list.push(json!({
+                "id": known,
+                "object": "model",
+                "owned_by": "crabbridge",
+            }));
+        }
+    }
+    let default_model = runtime.default_model.as_str();
+    if seen.insert(default_model.to_string()) {
+        list.push(json!({
+            "id": default_model,
+            "object": "model",
+            "owned_by": "crabbridge",
+        }));
+    }
 
     Json(json!({
         "object": "list",
@@ -83,9 +138,33 @@ pub async fn handle_fallback(req: Request) -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
-pub async fn handle_responses(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+pub async fn handle_responses_default(
+    State(state): State<AppState>,
+    body: axum::body::Bytes,
+) -> Response {
+    let provider = state.default_provider.clone();
+    handle_responses_for_provider(state, provider.as_str(), body).await
+}
+
+pub async fn handle_responses_routed(
+    State(state): State<AppState>,
+    Path(provider): Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    handle_responses_for_provider(state, &provider, body).await
+}
+
+async fn handle_responses_for_provider(
+    state: AppState,
+    provider: &str,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(runtime) = state.provider(provider) else {
+        return (StatusCode::NOT_FOUND, format!("unknown provider: {provider}")).into_response();
+    };
+
     let started = Instant::now();
-    info!(bytes = body.len(), "POST /v1/responses");
+    info!(provider, bytes = body.len(), "POST /{provider}/v1/responses");
     let req: ResponsesRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => {
@@ -105,6 +184,7 @@ pub async fn handle_responses(State(state): State<AppState>, body: axum::body::B
         _ => 1,
     };
     info!(
+        provider,
         model = %req.model,
         stream = req.stream,
         input_items,
@@ -118,18 +198,20 @@ pub async fn handle_responses(State(state): State<AppState>, body: axum::body::B
         summarize_debug_names(response_tool_debug_names(&req.tools))
     );
 
-    handle_responses_inner(state, req, started).await
+    handle_responses_inner(state, provider, runtime, req, started).await
 }
 
 async fn handle_responses_inner(
     state: AppState,
+    provider: &str,
+    runtime: ProviderRuntime,
     req: ResponsesRequest,
     started: Instant,
 ) -> Response {
     let mut history = req
         .previous_response_id
         .as_deref()
-        .map(|id| state.sessions.get_history(id))
+        .map(|id| state.sessions.get_history(provider, id))
         .unwrap_or_default();
     let history_messages = history.len();
     if should_isolate_spawn_child_request(&req, &history) {
@@ -143,11 +225,14 @@ async fn handle_responses_inner(
         &req,
         history,
         &state.sessions,
-        state.default_model.as_str(),
-        state.default_max_tokens,
-        state.default_temperature,
+        provider,
+        runtime.default_model.as_str(),
+        runtime.model_map.as_deref(),
+        runtime.default_max_tokens,
+        runtime.default_temperature,
     );
     info!(
+        provider,
         client_model = %model,
         upstream_model = %chat_req.model,
         history_messages,
@@ -160,7 +245,7 @@ async fn handle_responses_inner(
         "→ upstream tools={}",
         summarize_debug_names(chat_tool_debug_names(&chat_req.tools))
     );
-    let url = format!("{}chat/completions", join_base(&state.upstream));
+    let url = format!("{}chat/completions", join_base(&runtime.upstream));
 
     if req.stream {
         let response_id = state.sessions.new_id();
@@ -169,10 +254,11 @@ async fn handle_responses_inner(
         stream::translate_stream(StreamArgs {
             client: state.client,
             url,
-            api_key: state.api_key,
+            api_key: runtime.api_key,
             chat_req,
             upstream_request: state.upstream_request,
             response_id,
+            provider: provider.to_string(),
             sessions: state.sessions,
             request_messages,
             namespace_tools,
@@ -182,7 +268,17 @@ async fn handle_responses_inner(
         .into_response()
     } else {
         chat_req.stream = false;
-        handle_blocking(state, chat_req, url, model, namespace_tools, started).await
+        handle_blocking(
+            state,
+            provider,
+            runtime,
+            chat_req,
+            url,
+            model,
+            namespace_tools,
+            started,
+        )
+        .await
     }
 }
 
@@ -364,6 +460,8 @@ fn parse_spawn_agent_call(call: &serde_json::Value) -> Option<SpawnAgentCall> {
 
 async fn handle_blocking(
     state: AppState,
+    provider: &str,
+    runtime: ProviderRuntime,
     chat_req: ChatRequest,
     url: String,
     model: String,
@@ -376,9 +474,10 @@ async fn handle_blocking(
     if let Some(cache) = &state.cache
         && let Ok(body) = state.upstream_request.request_body(&chat_req)
     {
-        let key = ResponseCache::cache_key(&body);
+        let key = ResponseCache::cache_key(provider, &body);
         if let Some(cached) = cache.get(&key).await {
             info!(
+                provider,
                 cache_key = %key,
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 "returning cached responses payload"
@@ -397,8 +496,8 @@ async fn handle_blocking(
         .post(&url)
         .header("Content-Type", "application/json");
 
-    if !state.api_key.is_empty() {
-        builder = builder.bearer_auth(state.api_key.as_str());
+    if !runtime.api_key.is_empty() {
+        builder = builder.bearer_auth(runtime.api_key.as_str());
     }
 
     let upstream_body = match state.upstream_request.request_body(&chat_req) {
@@ -487,7 +586,7 @@ async fn handle_blocking(
 
                 let mut full_history = chat_req.messages.clone();
                 full_history.push(assistant_msg);
-                let response_id = state.sessions.save(full_history);
+                let response_id = state.sessions.save(provider, full_history);
 
                 let (resp, _) = if namespace_tools.is_empty() {
                     translate::from_chat_response(response_id.clone(), &model, chat_resp)
@@ -503,13 +602,14 @@ async fn handle_blocking(
                 if let Some(cache) = &state.cache
                     && let Ok(body) = state.upstream_request.request_body(&chat_req)
                 {
-                    let key = ResponseCache::cache_key(&body);
+                    let key = ResponseCache::cache_key(provider, &body);
                     if let Ok(bytes) = serde_json::to_vec(&resp) {
                         cache.insert(key, bytes::Bytes::from(bytes)).await;
                     }
                 }
 
                 info!(
+                    provider,
                     response_id = %response_id,
                     model = %model,
                     elapsed_ms = started.elapsed().as_millis() as u64,

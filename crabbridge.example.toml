@@ -2,21 +2,17 @@
 # Copy to crabbridge.toml (cwd) or ~/.config/crabbridge/config.toml
 # Priority: CLI flags > environment variables > this file > defaults
 
-# Provider preset: deepseek | kimi (Kimi Code / kimi-for-coding)
-provider = "deepseek"
+default_provider = "deepseek"
 
-[upstream]
-# Required for `crabridge serve`
-api_key = "sk-your-api-key-here"
-# Optional overrides (defaults come from provider preset)
-# base_url = "https://api.deepseek.com/v1"
-# model = "deepseek-v4-pro"
-#
-# Kimi Code:
-# provider = "kimi"
-# api_key = "sk-your-kimi-code-key"
-# base_url = "https://api.kimi.com/coding/v1"
-# model = "kimi-for-coding"
+[providers.deepseek]
+api_key = "sk-your-deepseek-key"
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-v4-pro"
+
+[providers.kimi]
+api_key = "sk-your-kimi-code-key"
+base_url = "https://api.kimi.com/coding/v1"
+model = "kimi-for-coding"
 
 [server]
 bind_addr = "127.0.0.1:11435"

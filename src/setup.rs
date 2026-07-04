@@ -11,11 +11,13 @@ use serde_json::Value;
 use toml_edit::{DocumentMut, Item, Table, value};
 use tracing::info;
 
-use crate::codex_config::{codex_home_dir, default_catalog_path, prepare_model_catalog, write_model_catalog};
+use crate::codex_config::{
+    catalog_path_for_slug, codex_home_dir, prepare_model_catalog, write_model_catalog,
+};
 use crate::config::{self, BridgeConfigFile};
 use crate::provider::ProviderKind;
 
-const PROVIDER_NAME: &str = "crabbridge";
+const LEGACY_PROVIDER_NAME: &str = "crabbridge";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckStatus {
@@ -49,7 +51,7 @@ impl SetupCheckReport {
 
 #[derive(Debug, Clone)]
 pub struct SetupCheckOptions {
-    pub provider: ProviderKind,
+    pub provider_slugs: Vec<String>,
     pub api_key: Option<String>,
     pub bridge_config_path: PathBuf,
     pub bind_addr: SocketAddr,
@@ -73,13 +75,16 @@ pub struct SetupResult {
 #[derive(Debug, Clone)]
 pub struct SetupOptions {
     pub provider: ProviderKind,
+    pub provider_slug: String,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub bind_addr: SocketAddr,
     pub write_bridge_config: bool,
+    pub write_multi_bridge_config: bool,
     pub bridge_config_path: PathBuf,
     pub force_bridge_config: bool,
+    pub set_active_codex_provider: bool,
 }
 
 pub async fn run_setup(opts: SetupOptions) -> Result<SetupResult> {
@@ -102,7 +107,7 @@ pub async fn run_setup(opts: SetupOptions) -> Result<SetupResult> {
     )
     .await;
 
-    let catalog_path = default_catalog_path();
+    let catalog_path = catalog_path_for_slug(&opts.provider_slug);
     write_model_catalog(&catalog_path, &models)
         .with_context(|| format!("failed to write {}", catalog_path.display()))?;
 
@@ -112,18 +117,50 @@ pub async fn run_setup(opts: SetupOptions) -> Result<SetupResult> {
     let codex_config_path = codex_home.join("config.toml");
     let codex_config_created = !codex_config_path.exists();
 
-    let bridge_base_url = format!("http://{}/v1", opts.bind_addr);
+    let codex_provider_name = ProviderKind::codex_provider_name(&opts.provider_slug);
+    let bridge_base_url = format!("http://{}/{}/v1", opts.bind_addr, opts.provider_slug);
     merge_codex_config(
         &codex_config_path,
-        PROVIDER_NAME,
+        &codex_provider_name,
         &model,
         &catalog_path,
         &bridge_base_url,
         opts.provider.codex_env_key(),
+        opts.set_active_codex_provider,
     )?;
 
     let mut bridge_config_created = false;
-    let bridge_config_path = if opts.write_bridge_config {
+    let bridge_config_path = if opts.write_multi_bridge_config {
+        let path = opts.bridge_config_path.clone();
+        if path.exists() && !opts.force_bridge_config {
+            info!(path = %path.display(), "bridge config already exists (unchanged)");
+            Some(path)
+        } else {
+            let deepseek_key = resolve_api_key(ProviderKind::DeepSeek, opts.api_key.clone())?;
+            let kimi_key = resolve_api_key(ProviderKind::Kimi, opts.api_key.clone())?;
+            config::write_multi_bridge_config(
+                &path,
+                "deepseek",
+                &[
+                    (
+                        "deepseek",
+                        ProviderKind::DeepSeek.default_base_url(),
+                        ProviderKind::DeepSeek.default_model(),
+                        deepseek_key.as_deref(),
+                    ),
+                    (
+                        "kimi",
+                        ProviderKind::Kimi.default_base_url(),
+                        ProviderKind::Kimi.default_model(),
+                        kimi_key.as_deref(),
+                    ),
+                ],
+                &opts.bind_addr.to_string(),
+            )?;
+            bridge_config_created = true;
+            Some(path)
+        }
+    } else if opts.write_bridge_config {
         let path = opts.bridge_config_path.clone();
         if path.exists() && !opts.force_bridge_config {
             info!(path = %path.display(), "bridge config already exists (unchanged)");
@@ -166,6 +203,7 @@ pub fn merge_codex_config(
     catalog_path: &Path,
     bridge_base_url: &str,
     env_key: &str,
+    set_active: bool,
 ) -> Result<()> {
     let existing = if path.exists() {
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?
@@ -177,23 +215,18 @@ pub fn merge_codex_config(
         .parse::<DocumentMut>()
         .unwrap_or_else(|_| DocumentMut::new());
 
-    doc.as_table_mut().remove("model_provider");
-    doc.as_table_mut().remove("model");
-    doc.as_table_mut().remove("model_catalog_json");
-
-    if let Some(providers) = doc.get_mut("model_providers").and_then(|i| i.as_table_mut()) {
-        providers.remove(provider_name);
-        if providers.is_empty() {
-            doc.as_table_mut().remove("model_providers");
-        }
+    if set_active {
+        doc.insert("model_provider", value(provider_name));
+        doc.insert("model", value(model));
+        doc.insert(
+            "model_catalog_json",
+            value(catalog_path.display().to_string()),
+        );
     }
 
-    doc.insert("model_provider", value(provider_name));
-    doc.insert("model", value(model));
-    doc.insert(
-        "model_catalog_json",
-        value(catalog_path.display().to_string()),
-    );
+    if let Some(providers) = doc.get_mut("model_providers").and_then(|i| i.as_table_mut()) {
+        providers.remove(LEGACY_PROVIDER_NAME);
+    }
 
     let mut provider_table = Table::new();
     provider_table.insert("name", value(provider_name));
@@ -332,17 +365,23 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
 
     let model_provider = doc.get("model_provider").and_then(|v| v.as_str());
     match model_provider {
-        Some(PROVIDER_NAME) => push_check(
+        Some(name) if name.starts_with("crabbridge") => push_check(
             &mut checks,
             "model_provider",
             CheckStatus::Ok,
-            PROVIDER_NAME.to_string(),
+            name.to_string(),
+        ),
+        Some(LEGACY_PROVIDER_NAME) => push_check(
+            &mut checks,
+            "model_provider",
+            CheckStatus::Warn,
+            format!("legacy \"{LEGACY_PROVIDER_NAME}\" — run `crabridge setup` to migrate"),
         ),
         Some(other) => push_check(
             &mut checks,
             "model_provider",
             CheckStatus::Warn,
-            format!("expected \"{PROVIDER_NAME}\", got \"{other}\""),
+            format!("expected crabbridge-* provider, got \"{other}\""),
         ),
         None => push_check(
             &mut checks,
@@ -352,8 +391,8 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
         ),
     }
 
-    let model = doc.get("model").and_then(|v| v.as_str()).map(str::to_string);
-    match &model {
+    let active_model = doc.get("model").and_then(|v| v.as_str()).map(str::to_string);
+    match &active_model {
         Some(m) => push_check(
             &mut checks,
             "model",
@@ -368,174 +407,6 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
         ),
     }
 
-    let catalog_path = doc
-        .get("model_catalog_json")
-        .and_then(|v| v.as_str())
-        .map(PathBuf::from)
-        .unwrap_or_else(default_catalog_path);
-
-    let catalog_models = match fs::read_to_string(&catalog_path) {
-        Ok(body) => match serde_json::from_str::<Value>(&body) {
-            Ok(json) => {
-                let count = json
-                    .get("models")
-                    .and_then(|m| m.as_array())
-                    .map(|a| a.len())
-                    .unwrap_or(0);
-                push_check(
-                    &mut checks,
-                    "model catalog",
-                    CheckStatus::Ok,
-                    format!("{} ({count} models)", catalog_path.display()),
-                );
-                catalog_model_slugs(&json)
-            }
-            Err(e) => {
-                push_check(
-                    &mut checks,
-                    "model catalog",
-                    CheckStatus::Fail,
-                    format!("{} invalid JSON: {e}", catalog_path.display()),
-                );
-                Vec::new()
-            }
-        },
-        Err(e) => {
-            push_check(
-                &mut checks,
-                "model catalog",
-                CheckStatus::Fail,
-                format!("{} ({e})", catalog_path.display()),
-            );
-            Vec::new()
-        }
-    };
-
-    if let Some(m) = &model {
-        if catalog_models.is_empty() {
-            push_check(
-                &mut checks,
-                "model in catalog",
-                CheckStatus::Warn,
-                format!("cannot verify \"{m}\" — catalog empty or unreadable"),
-            );
-        } else if catalog_models.iter().any(|s| s == m) {
-            push_check(
-                &mut checks,
-                "model in catalog",
-                CheckStatus::Ok,
-                format!("\"{m}\" found"),
-            );
-        } else {
-            push_check(
-                &mut checks,
-                "model in catalog",
-                CheckStatus::Fail,
-                format!("\"{m}\" missing from catalog (causes metadata warnings)"),
-            );
-        }
-    }
-
-    let provider_table = doc
-        .get("model_providers")
-        .and_then(|v| v.get(PROVIDER_NAME))
-        .and_then(|v| v.as_table());
-
-    let (bridge_base_url, env_key) = match provider_table {
-        Some(table) => {
-            let base_url = table.get("base_url").and_then(|v| v.as_str());
-            let wire_api = table.get("wire_api").and_then(|v| v.as_str());
-            let env_key = table.get("env_key").and_then(|v| v.as_str());
-
-            match base_url {
-                Some(url) => push_check(
-                    &mut checks,
-                    "bridge base_url",
-                    CheckStatus::Ok,
-                    url.to_string(),
-                ),
-                None => push_check(
-                    &mut checks,
-                    "bridge base_url",
-                    CheckStatus::Fail,
-                    "missing in [model_providers.crabbridge]".into(),
-                ),
-            }
-
-            match wire_api {
-                Some("responses") => push_check(
-                    &mut checks,
-                    "wire_api",
-                    CheckStatus::Ok,
-                    "responses".into(),
-                ),
-                Some(other) => push_check(
-                    &mut checks,
-                    "wire_api",
-                    CheckStatus::Warn,
-                    format!("expected \"responses\", got \"{other}\""),
-                ),
-                None => push_check(
-                    &mut checks,
-                    "wire_api",
-                    CheckStatus::Fail,
-                    "missing".into(),
-                ),
-            }
-
-            match env_key {
-                Some(key) => {
-                    push_check(
-                        &mut checks,
-                        "env_key",
-                        CheckStatus::Ok,
-                        key.to_string(),
-                    );
-                }
-                None => {
-                    push_check(
-                        &mut checks,
-                        "env_key",
-                        CheckStatus::Fail,
-                        "missing".into(),
-                    );
-                }
-            }
-
-            (
-                base_url.map(str::to_string),
-                env_key.map(str::to_string),
-            )
-        }
-        None => {
-            push_check(
-                &mut checks,
-                "model_providers.crabbridge",
-                CheckStatus::Fail,
-                "section missing — run `crabridge setup`".into(),
-            );
-            (None, None)
-        }
-    };
-
-    let expected_env_key = env_key
-        .as_deref()
-        .unwrap_or_else(|| opts.provider.codex_env_key());
-    match resolve_api_key(opts.provider, opts.api_key.clone())? {
-        Some(_) => push_check(
-            &mut checks,
-            "API key env",
-            CheckStatus::Ok,
-            format!("{expected_env_key} is set"),
-        ),
-        None => push_check(
-            &mut checks,
-            "API key env",
-            CheckStatus::Fail,
-            format!("{expected_env_key} is not set — export it before running Codex"),
-        ),
-    }
-
     check_bridge_config_file(&mut checks, &opts.bridge_config_path);
 
     if in_docker {
@@ -547,9 +418,186 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
         );
     }
 
-    if let Some(url) = bridge_base_url.as_deref() {
-        check_bridge_url(&mut checks, url, in_docker, opts.bind_addr).await;
-        check_docker_url_hints(&mut checks, url, in_docker);
+    for slug in &opts.provider_slugs {
+        let kind = ProviderKind::from_route(slug).unwrap_or(ProviderKind::Custom);
+        let codex_name = ProviderKind::codex_provider_name(slug);
+        let expected_base = format!("http://{}/{slug}/v1", opts.bind_addr);
+
+        let catalog_path = catalog_path_for_slug(slug);
+        let catalog_models = match fs::read_to_string(&catalog_path) {
+            Ok(body) => match serde_json::from_str::<Value>(&body) {
+                Ok(json) => {
+                    let count = json
+                        .get("models")
+                        .and_then(|m| m.as_array())
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+                    push_check(
+                        &mut checks,
+                        &format!("[{slug}] model catalog"),
+                        CheckStatus::Ok,
+                        format!("{} ({count} models)", catalog_path.display()),
+                    );
+                    catalog_model_slugs(&json)
+                }
+                Err(e) => {
+                    push_check(
+                        &mut checks,
+                        &format!("[{slug}] model catalog"),
+                        CheckStatus::Fail,
+                        format!("{} invalid JSON: {e}", catalog_path.display()),
+                    );
+                    Vec::new()
+                }
+            },
+            Err(e) => {
+                push_check(
+                    &mut checks,
+                    &format!("[{slug}] model catalog"),
+                    CheckStatus::Fail,
+                    format!("{} ({e})", catalog_path.display()),
+                );
+                Vec::new()
+            }
+        };
+
+        let provider_table = doc
+            .get("model_providers")
+            .and_then(|v| v.get(&codex_name))
+            .and_then(|v| v.as_table())
+            .or_else(|| {
+                if opts.provider_slugs.len() == 1 {
+                    doc.get("model_providers")
+                        .and_then(|v| v.get(LEGACY_PROVIDER_NAME))
+                        .and_then(|v| v.as_table())
+                } else {
+                    None
+                }
+            });
+
+        let mut bridge_base_url = None;
+        match provider_table {
+            Some(table) => {
+                let base_url = table.get("base_url").and_then(|v| v.as_str());
+                let wire_api = table.get("wire_api").and_then(|v| v.as_str());
+                let env_key = table.get("env_key").and_then(|v| v.as_str());
+
+                match base_url {
+                    Some(url) if url == expected_base => push_check(
+                        &mut checks,
+                        &format!("[{slug}] bridge base_url"),
+                        CheckStatus::Ok,
+                        url.to_string(),
+                    ),
+                    Some(url) => push_check(
+                        &mut checks,
+                        &format!("[{slug}] bridge base_url"),
+                        CheckStatus::Warn,
+                        format!("expected \"{expected_base}\", got \"{url}\""),
+                    ),
+                    None => push_check(
+                        &mut checks,
+                        &format!("[{slug}] bridge base_url"),
+                        CheckStatus::Fail,
+                        format!("missing in [model_providers.{codex_name}]"),
+                    ),
+                }
+
+                match wire_api {
+                    Some("responses") => push_check(
+                        &mut checks,
+                        &format!("[{slug}] wire_api"),
+                        CheckStatus::Ok,
+                        "responses".into(),
+                    ),
+                    Some(other) => push_check(
+                        &mut checks,
+                        &format!("[{slug}] wire_api"),
+                        CheckStatus::Warn,
+                        format!("expected \"responses\", got \"{other}\""),
+                    ),
+                    None => push_check(
+                        &mut checks,
+                        &format!("[{slug}] wire_api"),
+                        CheckStatus::Fail,
+                        "missing".into(),
+                    ),
+                }
+
+                if let Some(key) = env_key {
+                    push_check(
+                        &mut checks,
+                        &format!("[{slug}] env_key"),
+                        CheckStatus::Ok,
+                        key.to_string(),
+                    );
+                } else {
+                    push_check(
+                        &mut checks,
+                        &format!("[{slug}] env_key"),
+                        CheckStatus::Fail,
+                        "missing".into(),
+                    );
+                }
+
+                bridge_base_url = base_url.map(str::to_string);
+            }
+            None => {
+                push_check(
+                    &mut checks,
+                    &format!("[{slug}] model_providers.{codex_name}"),
+                    CheckStatus::Fail,
+                    format!("section missing — run `crabridge setup --provider {slug}`"),
+                );
+            }
+        }
+
+        let expected_env_key = kind.codex_env_key();
+        match resolve_api_key(kind, opts.api_key.clone())? {
+            Some(_) => push_check(
+                &mut checks,
+                &format!("[{slug}] API key env"),
+                CheckStatus::Ok,
+                format!("{expected_env_key} is set"),
+            ),
+            None => push_check(
+                &mut checks,
+                &format!("[{slug}] API key env"),
+                CheckStatus::Fail,
+                format!("{expected_env_key} is not set — export it before running Codex"),
+            ),
+        }
+
+        if let Some(m) = &active_model {
+            if model_provider == Some(codex_name.as_str()) {
+                if catalog_models.is_empty() {
+                    push_check(
+                        &mut checks,
+                        &format!("[{slug}] model in catalog"),
+                        CheckStatus::Warn,
+                        format!("cannot verify \"{m}\" — catalog empty or unreadable"),
+                    );
+                } else if catalog_models.iter().any(|s| s == m) {
+                    push_check(
+                        &mut checks,
+                        &format!("[{slug}] model in catalog"),
+                        CheckStatus::Ok,
+                        format!("\"{m}\" found"),
+                    );
+                } else {
+                    push_check(
+                        &mut checks,
+                        &format!("[{slug}] model in catalog"),
+                        CheckStatus::Fail,
+                        format!("\"{m}\" missing from catalog (causes metadata warnings)"),
+                    );
+                }
+            }
+        }
+
+        let route_url = bridge_base_url.as_deref().unwrap_or(expected_base.as_str());
+        check_bridge_route(&mut checks, slug, route_url, in_docker, opts.bind_addr).await;
+        check_docker_url_hints(&mut checks, route_url, in_docker, slug);
     }
 
     let report = SetupCheckReport { checks, in_docker };
@@ -612,12 +660,39 @@ fn check_bridge_config_file(checks: &mut Vec<ConfigCheck>, path: &Path) {
                 CheckStatus::Ok,
                 format!("{} ({summary})", path.display()),
             );
-            let has_key = cfg
-                .upstream
-                .as_ref()
-                .and_then(|u| u.api_key.as_ref())
-                .is_some_and(|k| !k.is_empty());
-            if !has_key {
+            let has_key = if !cfg.providers.is_empty() {
+                let missing: Vec<_> = cfg
+                    .providers
+                    .iter()
+                    .filter(|(_, section)| {
+                        section
+                            .api_key
+                            .as_ref()
+                            .is_none_or(|k| k.is_empty())
+                    })
+                    .map(|(slug, _)| slug.as_str())
+                    .collect();
+                if missing.is_empty() {
+                    true
+                } else {
+                    push_check(
+                        checks,
+                        "bridge config api_key",
+                        CheckStatus::Warn,
+                        format!(
+                            "missing api_key for: {} — set keys under [providers.*]",
+                            missing.join(", ")
+                        ),
+                    );
+                    false
+                }
+            } else {
+                cfg.upstream
+                    .as_ref()
+                    .and_then(|u| u.api_key.as_ref())
+                    .is_some_and(|k| !k.is_empty())
+            };
+            if !has_key && cfg.providers.is_empty() {
                 push_check(
                     checks,
                     "bridge config api_key",
@@ -637,7 +712,13 @@ fn check_bridge_config_file(checks: &mut Vec<ConfigCheck>, path: &Path) {
 
 fn bridge_config_summary(cfg: &BridgeConfigFile) -> String {
     let mut parts = Vec::new();
-    if let Some(p) = &cfg.provider {
+    if let Some(p) = &cfg.default_provider {
+        parts.push(format!("default={p}"));
+    }
+    if !cfg.providers.is_empty() {
+        let slugs: Vec<_> = cfg.providers.keys().cloned().collect();
+        parts.push(format!("providers={}", slugs.join(",")));
+    } else if let Some(p) = &cfg.provider {
         parts.push(format!("provider={p}"));
     }
     if let Some(upstream) = &cfg.upstream {
@@ -655,24 +736,27 @@ fn bridge_config_summary(cfg: &BridgeConfigFile) -> String {
     }
 }
 
-async fn check_bridge_url(
+async fn check_bridge_route(
     checks: &mut Vec<ConfigCheck>,
+    slug: &str,
     base_url: &str,
     in_docker: bool,
     bind_addr: SocketAddr,
 ) {
+    let trimmed = base_url.trim_end_matches('/');
+    let route_probe = trimmed.to_string();
     let health_urls = bridge_health_urls(base_url, in_docker, bind_addr);
     let client = Client::builder()
         .timeout(Duration::from_secs(3))
         .build()
         .unwrap_or_else(|_| Client::new());
 
-    for url in health_urls {
+    for url in [route_probe].into_iter().chain(health_urls) {
         match client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => {
                 push_check(
                     checks,
-                    "bridge reachability",
+                    &format!("[{slug}] bridge reachability"),
                     CheckStatus::Ok,
                     format!("GET {url} → {}", resp.status()),
                 );
@@ -681,7 +765,7 @@ async fn check_bridge_url(
             Ok(resp) => {
                 push_check(
                     checks,
-                    "bridge reachability",
+                    &format!("[{slug}] bridge reachability"),
                     CheckStatus::Warn,
                     format!("GET {url} → HTTP {}", resp.status()),
                 );
@@ -690,7 +774,7 @@ async fn check_bridge_url(
             Err(e) => {
                 push_check(
                     checks,
-                    "bridge reachability",
+                    &format!("[{slug}] bridge reachability"),
                     CheckStatus::Fail,
                     format!("GET {url} failed: {e}"),
                 );
@@ -702,7 +786,12 @@ async fn check_bridge_url(
 
 fn bridge_health_urls(base_url: &str, in_docker: bool, bind_addr: SocketAddr) -> Vec<String> {
     let trimmed = base_url.trim_end_matches('/');
-    let root = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
+    let mut root = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
+    if let Some((without_slug, slug)) = root.rsplit_once('/') {
+        if ProviderKind::from_route(slug).is_some() {
+            root = without_slug;
+        }
+    }
     let mut urls = vec![format!("{root}/health")];
 
     if in_docker && bind_addr.ip().is_unspecified() {
@@ -717,7 +806,12 @@ fn bridge_health_urls(base_url: &str, in_docker: bool, bind_addr: SocketAddr) ->
     urls
 }
 
-fn check_docker_url_hints(checks: &mut Vec<ConfigCheck>, base_url: &str, in_docker: bool) {
+fn check_docker_url_hints(
+    checks: &mut Vec<ConfigCheck>,
+    base_url: &str,
+    in_docker: bool,
+    slug: &str,
+) {
     let Ok(parsed) = Url::parse(base_url) else {
         return;
     };
@@ -740,7 +834,7 @@ fn check_docker_url_hints(checks: &mut Vec<ConfigCheck>, base_url: &str, in_dock
             checks,
             "docker networking",
             CheckStatus::Warn,
-            "base_url targets Docker host DNS — use http://127.0.0.1:11435/v1 when Codex runs on the same machine"
+            format!("base_url targets Docker host DNS — use http://127.0.0.1:11435/{slug}/v1 when Codex runs on the same host")
                 .into(),
         );
     } else if !in_docker && is_loopback {
@@ -823,18 +917,19 @@ trust_level = "trusted"
 
         merge_codex_config(
             &path,
-            "crabbridge",
+            "crabbridge-kimi",
             "kimi-for-coding",
             &catalog,
-            "http://127.0.0.1:11435/v1",
+            "http://127.0.0.1:11435/kimi/v1",
             "KIMI_API_KEY",
+            true,
         )
         .unwrap();
 
         let merged = fs::read_to_string(&path).unwrap();
-        assert!(merged.contains("model_provider = \"crabbridge\""));
+        assert!(merged.contains("model_provider = \"crabbridge-kimi\""));
         assert!(merged.contains("model = \"kimi-for-coding\""));
-        assert!(merged.contains("[model_providers.crabbridge]"));
+        assert!(merged.contains("[model_providers.crabbridge-kimi]"));
         assert!(merged.contains("env_key = \"KIMI_API_KEY\""));
         assert!(merged.contains("[projects.\"/tmp/foo\"]"));
         assert!(!merged.contains("model_provider = \"openai\""));
@@ -854,9 +949,20 @@ trust_level = "trusted"
         )
         .unwrap();
         let body = fs::read_to_string(&path).unwrap();
-        assert!(body.contains("provider = \"kimi\""));
+        assert!(body.contains("default_provider = \"kimi\""));
+        assert!(body.contains("[providers.kimi]"));
         assert!(body.contains("api_key = \"sk-test\""));
         assert!(body.contains("model = \"kimi-for-coding\""));
+    }
+
+    #[test]
+    fn bridge_health_url_strips_provider_path() {
+        let urls = bridge_health_urls(
+            "http://127.0.0.1:11435/kimi/v1",
+            false,
+            "127.0.0.1:11435".parse().unwrap(),
+        );
+        assert_eq!(urls[0], "http://127.0.0.1:11435/health");
     }
 
     #[test]

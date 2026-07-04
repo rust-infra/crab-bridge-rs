@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,20 +9,39 @@ use axum::{
     routing::{get, post},
 };
 use crab_bridge_rs::handlers::{
-    api_root, handle_fallback, handle_models, handle_responses, health,
+    api_root_default, api_root_routed, handle_fallback, handle_models_default,
+    handle_models_routed, handle_responses_default, handle_responses_routed, health,
 };
 use crab_bridge_rs::session::SessionStore;
-use crab_bridge_rs::state::AppState;
+use crab_bridge_rs::state::{AppState, ProviderRuntime};
 use crab_bridge_rs::upstream_request::UpstreamRequestConfig;
 use reqwest::Client;
 use serde_json::json;
 use tokio::net::TcpListener;
 
-async fn spawn_test_server(mock_base_url: &str) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+async fn spawn_test_server(
+    mock_base_url: &str,
+    provider_slug: &str,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind test listener");
     let addr = listener.local_addr().expect("local addr");
+
+    let mut providers = HashMap::new();
+    providers.insert(
+        provider_slug.to_string(),
+        ProviderRuntime {
+            upstream: mock_base_url
+                .parse()
+                .expect("mock upstream url must be valid"),
+            api_key: Arc::new("test-key".to_string()),
+            default_model: Arc::new("deepseek-chat".to_string()),
+            default_max_tokens: None,
+            default_temperature: None,
+            model_map: None,
+        },
+    );
 
     let state = AppState {
         sessions: SessionStore::with_limits_and_ttl(
@@ -30,24 +50,20 @@ async fn spawn_test_server(mock_base_url: &str) -> (SocketAddr, tokio::task::Joi
             Duration::from_secs(3600),
         ),
         client: Client::new(),
-        upstream: Arc::new(
-            mock_base_url
-                .parse()
-                .expect("mock upstream url must be valid"),
-        ),
-        api_key: Arc::new("test-key".to_string()),
-        default_model: Arc::new("deepseek-chat".to_string()),
-        default_max_tokens: None,
-        default_temperature: None,
+        providers: Arc::new(providers),
+        default_provider: Arc::new(provider_slug.to_string()),
         upstream_request: Arc::new(UpstreamRequestConfig::default()),
         cache: None,
     };
 
     let app = Router::new()
         .route("/health", get(health))
-        .route("/v1", get(api_root))
-        .route("/v1/responses", post(handle_responses))
-        .route("/v1/models", get(handle_models))
+        .route("/v1", get(api_root_default))
+        .route("/v1/responses", post(handle_responses_default))
+        .route("/v1/models", get(handle_models_default))
+        .route("/{provider}/v1", get(api_root_routed))
+        .route("/{provider}/v1/responses", post(handle_responses_routed))
+        .route("/{provider}/v1/models", get(handle_models_routed))
         .fallback(handle_fallback)
         .layer(DefaultBodyLimit::disable())
         .with_state(state);
@@ -64,7 +80,7 @@ async fn spawn_test_server(mock_base_url: &str) -> (SocketAddr, tokio::task::Joi
 #[tokio::test]
 async fn health_endpoint_returns_ok() {
     let mock = mockito::Server::new_async().await;
-    let (addr, _handle) = spawn_test_server(&mock.url()).await;
+    let (addr, _handle) = spawn_test_server(&mock.url(), "deepseek").await;
 
     let response: serde_json::Value = Client::new()
         .get(format!("http://{addr}/health"))
@@ -90,10 +106,10 @@ async fn non_stream_response_is_translated() {
         .create_async()
         .await;
 
-    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url())).await;
+    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url()), "deepseek").await;
 
     let response = Client::new()
-        .post(format!("http://{addr}/v1/responses"))
+        .post(format!("http://{addr}/deepseek/v1/responses"))
         .json(&json!({
             "model": "gpt-5.4",
             "input": "hello",
@@ -114,6 +130,37 @@ async fn non_stream_response_is_translated() {
 }
 
 #[tokio::test]
+async fn legacy_v1_route_still_works() {
+    let mut mock = mockito::Server::new_async().await;
+    let _mock = mock
+        .mock("POST", "/v1/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"choices":[{"message":{"role":"assistant","content":"legacy"}}]}"#)
+        .create_async()
+        .await;
+
+    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url()), "deepseek").await;
+
+    let response = Client::new()
+        .post(format!("http://{addr}/v1/responses"))
+        .json(&json!({
+            "model": "gpt-5.4",
+            "input": "hello",
+            "stream": false
+        }))
+        .send()
+        .await
+        .expect("send")
+        .text()
+        .await
+        .expect("body");
+
+    let body: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(body["output"][0]["content"][0]["text"], "legacy");
+}
+
+#[tokio::test]
 async fn stream_response_is_translated() {
     let mut mock = mockito::Server::new_async().await;
     let _mock = mock
@@ -125,10 +172,10 @@ async fn stream_response_is_translated() {
         .create_async()
         .await;
 
-    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url())).await;
+    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url()), "deepseek").await;
 
     let body = Client::new()
-        .post(format!("http://{addr}/v1/responses"))
+        .post(format!("http://{addr}/deepseek/v1/responses"))
         .json(&json!({
             "model": "gpt-5.4",
             "input": "hello",
@@ -157,10 +204,10 @@ async fn models_endpoint_proxies_upstream() {
         .create_async()
         .await;
 
-    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url())).await;
+    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url()), "deepseek").await;
 
     let response: serde_json::Value = Client::new()
-        .get(format!("http://{addr}/v1/models"))
+        .get(format!("http://{addr}/deepseek/v1/models"))
         .send()
         .await
         .expect("send")

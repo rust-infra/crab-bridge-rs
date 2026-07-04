@@ -16,7 +16,9 @@ pub fn to_chat_request(
     req: &ResponsesRequest,
     history: Vec<ChatMessage>,
     sessions: &SessionStore,
+    provider: &str,
     default_model: &str,
+    model_map: Option<&str>,
     default_max_tokens: Option<u32>,
     default_temperature: Option<f32>,
 ) -> ChatRequest {
@@ -112,7 +114,7 @@ pub fn to_chat_request(
                             .and_then(|v| v.as_str())
                             .unwrap_or("{}");
                         if reasoning_content.is_none() {
-                            reasoning_content = sessions.get_reasoning(call_id);
+                            reasoning_content = sessions.get_reasoning(provider, call_id);
                         }
                         grouped.push(json!({
                             "id": call_id,
@@ -132,7 +134,7 @@ pub fn to_chat_request(
                     };
                     // Fallback: try turn-level fingerprint if call_id lookup missed
                     if msg.reasoning_content.is_none() {
-                        msg.reasoning_content = sessions.get_turn_reasoning(&messages, &msg);
+                        msg.reasoning_content = sessions.get_turn_reasoning(provider, &messages, &msg);
                     }
                     messages.push(msg);
                 } else {
@@ -183,7 +185,7 @@ pub fn to_chat_request(
                             // DeepSeek that require reasoning_content to be passed back).
                             if msg.role == "assistant" {
                                 msg.reasoning_content =
-                                    sessions.get_turn_reasoning(&messages, &msg);
+                                    sessions.get_turn_reasoning(provider, &messages, &msg);
                             }
                             // System/developer messages from input items must go to the
                             // front of the array. Codex sometimes interleaves them between
@@ -207,7 +209,7 @@ pub fn to_chat_request(
         }
     }
 
-    let mapped_model = map_model_name(&req.model, default_model);
+    let mapped_model = map_model_name(&req.model, default_model, model_map);
     // GLM/Zhipu only emits reasoning_content when `thinking` is explicitly
     // enabled; its default auto-thinking is suppressed by heavy agent system
     // prompts (e.g. Codex). Other providers (DeepSeek/Kimi) think by default and
@@ -241,8 +243,16 @@ fn is_glm_like_model(model: &str) -> bool {
 /// Map model names via `CRABRIDGE_MODEL_MAP` env var.
 /// Format: `source-model:target-model,source2:target2`
 /// Unmapped Codex model names fall back to the configured default upstream model.
-pub(crate) fn map_model_name(name: &str, default_model: &str) -> String {
-    if let Ok(map_str) = std::env::var("CRABRIDGE_MODEL_MAP") {
+pub(crate) fn map_model_name(
+    name: &str,
+    default_model: &str,
+    model_map: Option<&str>,
+) -> String {
+    let env_map = std::env::var("CRABRIDGE_MODEL_MAP").ok();
+    let map_source = model_map
+        .filter(|m| !m.is_empty())
+        .or(env_map.as_deref().filter(|m| !m.is_empty()));
+    if let Some(map_str) = map_source {
         for pair in map_str.split(',') {
             let mut parts = pair.splitn(2, ':');
             if let (Some(from), Some(to)) = (parts.next(), parts.next())
@@ -651,7 +661,7 @@ mod tests {
     fn test_text_input_becomes_user_message() {
         let sessions = SessionStore::new();
         let req = base_req(ResponsesInput::Text("hello".into()));
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         assert_eq!(chat.messages.len(), 1);
         assert_eq!(chat.messages[0].role, "user");
         assert_eq!(chat.messages[0].text_content(), "hello");
@@ -662,7 +672,7 @@ mod tests {
         let sessions = SessionStore::new();
         let mut req = base_req(ResponsesInput::Text("hi".into()));
         req.instructions = Some("be helpful".into());
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         assert_eq!(chat.messages[0].role, "system");
         assert_eq!(chat.messages[0].text_content(), "be helpful");
     }
@@ -673,7 +683,7 @@ mod tests {
         let req = base_req(ResponsesInput::Messages(vec![
             json!({"type": "message", "role": "developer", "content": "secret instructions"}),
         ]));
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         assert_eq!(chat.messages[0].role, "system");
         assert_eq!(chat.messages[0].text_content(), "secret instructions");
     }
@@ -685,7 +695,7 @@ mod tests {
             json!({"type": "function_call", "call_id": "c1", "name": "fn_a", "arguments": "{}"}),
             json!({"type": "function_call", "call_id": "c2", "name": "fn_b", "arguments": "{}"}),
         ]));
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         assert_eq!(chat.messages.len(), 1);
         assert_eq!(chat.messages[0].role, "assistant");
         let calls = chat.messages[0].tool_calls.as_ref().unwrap();
@@ -704,7 +714,7 @@ mod tests {
             "name": "status",
             "arguments": "{}"
         })]));
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         let calls = chat.messages[0].tool_calls.as_ref().unwrap();
         assert_eq!(
             calls[0]["function"]["name"].as_str(),
@@ -840,7 +850,7 @@ mod tests {
         let req = base_req(ResponsesInput::Messages(vec![
             json!({"type": "function_call_output", "call_id": "c1", "output": "result"}),
         ]));
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         assert_eq!(chat.messages[0].role, "tool");
         assert_eq!(chat.messages[0].text_content(), "result");
         assert_eq!(chat.messages[0].tool_call_id.as_deref(), Some("c1"));
@@ -930,7 +940,7 @@ mod tests {
             json!({"type": "function", "name": "wait_agent"}),
         ];
 
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         let names: Vec<&str> = chat
             .tools
             .iter()
@@ -951,7 +961,7 @@ mod tests {
         let req = base_req(ResponsesInput::Messages(vec![
             json!({"type": "message", "role": "user", "content": "plain text"}),
         ]));
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         assert_eq!(chat.messages[0].text_content(), "plain text");
     }
 
@@ -966,7 +976,7 @@ mod tests {
                 {"type": "input_image", "image_url": "data:image/png;base64,AAA"}
             ]}),
         ]));
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         let parts = chat.messages[0]
             .content
             .as_ref()
@@ -988,7 +998,7 @@ mod tests {
                 {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}}
             ]}),
         ]));
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         let parts = chat.messages[0]
             .content
             .as_ref()
@@ -1008,7 +1018,7 @@ mod tests {
                 {"type": "input_text", "text": "hi"}
             ]}),
         ]));
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         assert!(chat.messages[0].content.as_ref().unwrap().is_string());
         assert_eq!(chat.messages[0].text_content(), "hi");
     }
@@ -1022,7 +1032,7 @@ mod tests {
                 {"type": "input_text", "text": "world"}
             ]}),
         ]));
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         assert_eq!(chat.messages[0].text_content(), "hello world");
     }
 
@@ -1066,7 +1076,7 @@ mod tests {
             json!({"type": "message", "role": "user", "content": "next"}),
         ]));
 
-        let chat = to_chat_request(&req, history, &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, history, &sessions, "test", "deepseek-chat", None, None, None);
 
         // Should have: user, assistant{tool_calls:[call_1]}, tool(call_1), user(next)
         // NOT: user, assistant{tool_calls:[call_1]}, assistant{tool_calls:[call_1]}, tool(call_1), user
@@ -1128,7 +1138,7 @@ mod tests {
             json!({"type": "message", "role": "user", "content": "next"}),
         ]));
 
-        let chat = to_chat_request(&req, history, &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, history, &sessions, "test", "deepseek-chat", None, None, None);
 
         // Should have: user, assistant{tool_calls}, tool, user(next)
         // NOT: user, assistant{tool_calls}, tool, tool(dup), user
@@ -1152,7 +1162,7 @@ mod tests {
             json!({"type": "function_call_output", "call_id": "c1", "output": "done"}),
             json!({"type": "message", "role": "user", "content": "next turn"}),
         ]));
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         let roles: Vec<&str> = chat.messages.iter().map(|m| m.role.as_str()).collect();
         assert_eq!(
             roles,
@@ -1170,7 +1180,7 @@ mod tests {
             json!({"type": "message", "role": "developer", "content": "rules"}),
             json!({"type": "message", "role": "user", "content": "hello"}),
         ]));
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         assert_eq!(chat.messages[0].role, "system");
         assert_eq!(chat.messages[0].text_content(), "rules");
         assert_eq!(chat.messages[1].role, "user");
@@ -1186,7 +1196,7 @@ mod tests {
             json!({"type": "message", "role": "developer", "content": "override"}),
         ]));
         req.instructions = Some("original".into());
-        let chat = to_chat_request(&req, vec![], &sessions, "deepseek-chat", None, None);
+        let chat = to_chat_request(&req, vec![], &sessions, "test", "deepseek-chat", None, None, None);
         assert_eq!(chat.messages[0].role, "system");
         assert_eq!(chat.messages[0].text_content(), "override");
     }
@@ -1203,11 +1213,11 @@ mod tests {
             );
         }
         assert_eq!(
-            map_model_name("gpt-5.4", "deepseek-chat"),
+            map_model_name("gpt-5.4", "deepseek-chat", None),
             "deepseek-v4-pro"
         );
         assert_eq!(
-            map_model_name("gpt-5.5", "deepseek-chat"),
+            map_model_name("gpt-5.5", "deepseek-chat", None),
             "deepseek-v4-pro"
         );
         unsafe { std::env::remove_var("CRABRIDGE_MODEL_MAP") };
@@ -1218,7 +1228,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("CRABRIDGE_MODEL_MAP", "gpt-5.4:deepseek-v4-pro") };
         assert_eq!(
-            map_model_name("unknown-model", "deepseek-chat"),
+            map_model_name("unknown-model", "deepseek-chat", None),
             "deepseek-chat"
         );
         unsafe { std::env::remove_var("CRABRIDGE_MODEL_MAP") };
@@ -1228,7 +1238,7 @@ mod tests {
     fn test_map_model_name_no_env_var() {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::remove_var("CRABRIDGE_MODEL_MAP") };
-        assert_eq!(map_model_name("gpt-5.4", "deepseek-chat"), "deepseek-chat");
+        assert_eq!(map_model_name("gpt-5.4", "deepseek-chat", None), "deepseek-chat");
     }
 
     #[test]
@@ -1236,11 +1246,11 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::remove_var("CRABRIDGE_MODEL_MAP") };
         assert_eq!(
-            map_model_name("kimi-for-coding", "deepseek-chat"),
+            map_model_name("kimi-for-coding", "deepseek-chat", None),
             "kimi-for-coding"
         );
         assert_eq!(
-            map_model_name("gpt-5.4", "kimi-for-coding"),
+            map_model_name("gpt-5.4", "kimi-for-coding", None),
             "kimi-for-coding"
         );
     }
@@ -1255,15 +1265,15 @@ mod tests {
             );
         }
         assert_eq!(
-            map_model_name("gpt-5.4", "deepseek-chat"),
+            map_model_name("gpt-5.4", "deepseek-chat", None),
             "deepseek-v4-pro"
         );
         assert_eq!(
-            map_model_name("gpt-5.5", "deepseek-chat"),
+            map_model_name("gpt-5.5", "deepseek-chat", None),
             "deepseek-v4-flash"
         );
         assert_eq!(
-            map_model_name("deepseek-reasoner", "deepseek-chat"),
+            map_model_name("deepseek-reasoner", "deepseek-chat", None),
             "deepseek-reasoner"
         );
         unsafe { std::env::remove_var("CRABRIDGE_MODEL_MAP") };

@@ -87,12 +87,17 @@ function Install-Config([string]$RepoRoot, [string]$TargetConfigDir) {
         Copy-Item $example $configFile
     } else {
         @"
-provider = "deepseek"
+default_provider = "deepseek"
 
-[upstream]
+[providers.deepseek]
 api_key = "sk-your-api-key-here"
 base_url = "https://api.deepseek.com/v1"
 model = "deepseek-v4-pro"
+
+[providers.kimi]
+api_key = "sk-your-kimi-code-key"
+base_url = "https://api.kimi.com/coding/v1"
+model = "kimi-for-coding"
 
 [server]
 bind_addr = "127.0.0.1:11435"
