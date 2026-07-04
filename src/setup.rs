@@ -82,6 +82,8 @@ pub struct SetupOptions {
     pub bind_addr: SocketAddr,
     pub write_bridge_config: bool,
     pub write_multi_bridge_config: bool,
+    /// Slugs to include when writing multi-provider `crabbridge.toml`.
+    pub multi_provider_slugs: Option<Vec<String>>,
     pub bridge_config_path: PathBuf,
     pub force_bridge_config: bool,
     pub set_active_codex_provider: bool,
@@ -94,7 +96,7 @@ pub async fn run_setup(opts: SetupOptions) -> Result<SetupResult> {
     let model = opts
         .model
         .unwrap_or_else(|| opts.provider.default_model().to_string());
-    let upstream = Url::parse(base_url.trim_end_matches('/'))
+    let upstream = config::validate_upstream_url(&base_url)
         .context("invalid upstream base URL")?;
 
     let client = Client::new();
@@ -136,25 +138,25 @@ pub async fn run_setup(opts: SetupOptions) -> Result<SetupResult> {
             info!(path = %path.display(), "bridge config already exists (unchanged)");
             Some(path)
         } else {
-            let deepseek_key = resolve_api_key(ProviderKind::DeepSeek, opts.api_key.clone())?;
-            let kimi_key = resolve_api_key(ProviderKind::Kimi, opts.api_key.clone())?;
+            let slugs = opts
+                .multi_provider_slugs
+                .as_ref()
+                .context("multi_provider_slugs required for multi bridge config")?;
+            let entries = config::provider_bridge_entries(slugs, opts.api_key.clone());
+            let entry_refs: Vec<(&str, &str, &str, Option<&str>)> = entries
+                .iter()
+                .map(|(slug, url, model, key)| {
+                    (slug.as_str(), url.as_str(), model.as_str(), key.as_deref())
+                })
+                .collect();
+            let default_provider = slugs
+                .last()
+                .map(|s| s.as_str())
+                .unwrap_or_else(|| opts.provider_slug.as_str());
             config::write_multi_bridge_config(
                 &path,
-                "deepseek",
-                &[
-                    (
-                        "deepseek",
-                        ProviderKind::DeepSeek.default_base_url(),
-                        ProviderKind::DeepSeek.default_model(),
-                        deepseek_key.as_deref(),
-                    ),
-                    (
-                        "kimi",
-                        ProviderKind::Kimi.default_base_url(),
-                        ProviderKind::Kimi.default_model(),
-                        kimi_key.as_deref(),
-                    ),
-                ],
+                default_provider,
+                &entry_refs,
                 &opts.bind_addr.to_string(),
             )?;
             bridge_config_created = true;
@@ -270,20 +272,6 @@ pub fn print_setup_summary(result: &SetupResult) {
     }
     println!("  3. Restart Codex — it should show model: {}", result.model);
     println!();
-}
-
-pub fn resolve_api_key(provider: ProviderKind, explicit: Option<String>) -> Result<Option<String>> {
-    if let Some(key) = explicit.filter(|k| !k.is_empty()) {
-        return Ok(Some(key));
-    }
-    for var in provider.preferred_api_key_vars() {
-        if let Ok(key) = std::env::var(var)
-            && !key.is_empty()
-        {
-            return Ok(Some(key));
-        }
-    }
-    Ok(None)
 }
 
 pub fn running_in_docker() -> bool {
@@ -553,7 +541,7 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
         }
 
         let expected_env_key = kind.codex_env_key();
-        match resolve_api_key(kind, opts.api_key.clone())? {
+        match config::resolve_api_key(&slug, kind, opts.api_key.clone()) {
             Some(_) => push_check(
                 &mut checks,
                 &format!("[{slug}] API key env"),

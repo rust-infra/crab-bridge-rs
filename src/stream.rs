@@ -54,6 +54,16 @@ fn summarize_stream_tool_call_names(tool_calls: &BTreeMap<usize, ToolCallAccum>)
         .join(", ")
 }
 
+/// Some OpenAI-compatible providers close SSE without `[DONE]`; finalize when content arrived.
+fn should_finalize_stream_without_done(
+    stream_done: bool,
+    stream_err: bool,
+    has_text: bool,
+    has_tool_calls: bool,
+) -> bool {
+    !stream_done && !stream_err && (has_text || has_tool_calls)
+}
+
 /// Translate an upstream Chat Completions SSE stream into a Responses API SSE stream.
 ///
 /// Text response event sequence:
@@ -404,7 +414,12 @@ pub fn translate_stream(
         // (text and/or tool calls), treat it as complete so the response is
         // persisted and `response.completed` is emitted. A mid-stream error
         // (stream_err) still discards the partial turn.
-        if !stream_done && !stream_err && (!accumulated_text.is_empty() || !tool_calls.is_empty()) {
+        if should_finalize_stream_without_done(
+            stream_done,
+            stream_err,
+            !accumulated_text.is_empty(),
+            !tool_calls.is_empty(),
+        ) {
             warn!("stream ended without [DONE] but content was received — treating as complete");
             stream_done = true;
         }
@@ -541,4 +556,54 @@ pub fn translate_stream(
     };
 
     Sse::new(event_stream).keep_alive(KeepAlive::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summarize_stream_tool_call_names_lists_names() {
+        let mut tool_calls = BTreeMap::new();
+        tool_calls.insert(
+            0,
+            ToolCallAccum {
+                id: "c1".into(),
+                name: "read_file".into(),
+                arguments: "{}".into(),
+            },
+        );
+        tool_calls.insert(
+            1,
+            ToolCallAccum {
+                id: "c2".into(),
+                name: "grep".into(),
+                arguments: "{}".into(),
+            },
+        );
+        assert_eq!(
+            summarize_stream_tool_call_names(&tool_calls),
+            "read_file, grep"
+        );
+        assert_eq!(summarize_stream_tool_call_names(&BTreeMap::new()), "(none)");
+    }
+
+    #[test]
+    fn should_finalize_stream_without_done_when_content_received() {
+        assert!(should_finalize_stream_without_done(
+            false, false, true, false
+        ));
+        assert!(should_finalize_stream_without_done(
+            false, false, false, true
+        ));
+        assert!(!should_finalize_stream_without_done(
+            true, false, true, false
+        ));
+        assert!(!should_finalize_stream_without_done(
+            false, true, true, false
+        ));
+        assert!(!should_finalize_stream_without_done(
+            false, false, false, false
+        ));
+    }
 }

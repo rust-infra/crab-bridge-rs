@@ -3,15 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::{
-    Router,
-    extract::DefaultBodyLimit,
-    routing::{get, post},
-};
-use crab_bridge_rs::handlers::{
-    api_root_default, api_root_routed, handle_fallback, handle_models_default,
-    handle_models_routed, handle_responses_default, handle_responses_routed, health,
-};
+use crab_bridge_rs::app::build_router;
 use crab_bridge_rs::session::SessionStore;
 use crab_bridge_rs::state::{AppState, ProviderRuntime};
 use crab_bridge_rs::upstream_request::UpstreamRequestConfig;
@@ -56,17 +48,7 @@ async fn spawn_test_server(
         cache: None,
     };
 
-    let app = Router::new()
-        .route("/health", get(health))
-        .route("/v1", get(api_root_default))
-        .route("/v1/responses", post(handle_responses_default))
-        .route("/v1/models", get(handle_models_default))
-        .route("/{provider}/v1", get(api_root_routed))
-        .route("/{provider}/v1/responses", post(handle_responses_routed))
-        .route("/{provider}/v1/models", get(handle_models_routed))
-        .fallback(handle_fallback)
-        .layer(DefaultBodyLimit::disable())
-        .with_state(state);
+    let app = build_router(state);
 
     let handle = tokio::spawn(async move {
         axum::serve(listener, app)
@@ -169,6 +151,38 @@ async fn stream_response_is_translated() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_body("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n")
+        .create_async()
+        .await;
+
+    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url()), "deepseek").await;
+
+    let body = Client::new()
+        .post(format!("http://{addr}/deepseek/v1/responses"))
+        .json(&json!({
+            "model": "gpt-5.4",
+            "input": "hello",
+            "stream": true
+        }))
+        .send()
+        .await
+        .expect("send")
+        .text()
+        .await
+        .expect("text");
+
+    assert!(body.contains("response.output_text.delta"));
+    assert!(body.contains("response.completed"));
+}
+
+#[tokio::test]
+async fn stream_without_done_completes_when_content_received() {
+    let mut mock = mockito::Server::new_async().await;
+    let _mock = mock
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
         .create_async()
         .await;
 

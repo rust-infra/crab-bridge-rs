@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use reqwest::Url;
 use serde::Deserialize;
 
 use crate::provider::ProviderKind;
@@ -411,23 +412,65 @@ fn resolve_provider_api_key(
     kind: ProviderKind,
     explicit: Option<String>,
 ) -> String {
+    resolve_api_key(slug, kind, explicit).unwrap_or_default()
+}
+
+/// Resolve an upstream API key: explicit flag → `CRABRIDGE_{SLUG}_API_KEY` → provider env vars.
+pub fn resolve_api_key(
+    slug: &str,
+    kind: ProviderKind,
+    explicit: Option<String>,
+) -> Option<String> {
     if let Some(key) = explicit.filter(|k| !k.is_empty()) {
-        return key;
+        return Some(key);
     }
     let upper = slug.to_ascii_uppercase();
     if let Ok(key) = env::var(format!("CRABRIDGE_{upper}_API_KEY"))
         && !key.is_empty()
     {
-        return key;
+        return Some(key);
     }
     for var in kind.preferred_api_key_vars() {
         if let Ok(key) = env::var(var)
             && !key.is_empty()
         {
-            return key;
+            return Some(key);
         }
     }
-    String::new()
+    None
+}
+
+/// Parse and validate an upstream HTTP(S) base URL.
+pub fn validate_upstream_url(raw: &str) -> Result<Url> {
+    let url = Url::parse(raw.trim_end_matches('/'))?;
+    match url.scheme() {
+        "http" | "https" => {}
+        s => bail!("upstream URL scheme must be http or https, got: {s}"),
+    }
+    if url.host_str().is_none() {
+        bail!("upstream URL must have a host");
+    }
+    Ok(url)
+}
+
+/// Build `(slug, base_url, model, api_key)` rows for multi-provider bridge TOML.
+pub fn provider_bridge_entries(
+    slugs: &[String],
+    explicit_key: Option<String>,
+) -> Vec<(String, String, String, Option<String>)> {
+    slugs
+        .iter()
+        .map(|slug| {
+            let kind = ProviderKind::from_route(slug).unwrap_or(ProviderKind::Custom);
+            let key = resolve_api_key(slug, kind, explicit_key.clone());
+            (
+                slug.clone(),
+                kind.default_base_url().to_string(),
+                kind.default_model().to_string(),
+                key,
+            )
+        })
+        .collect()
 }
 
 /// Write a starter `crabbridge.toml` for `crabridge serve`.
@@ -686,6 +729,41 @@ model = "kimi-for-coding"
             env::remove_var("UPSTREAM_API_KEY");
             env::remove_var("UPSTREAM_MODEL");
             env::remove_var("CRABRIDGE_PROVIDER");
+        }
+    }
+
+    #[test]
+    fn validate_upstream_url_rejects_bad_scheme() {
+        assert!(validate_upstream_url("ftp://example.com/v1").is_err());
+        assert!(validate_upstream_url("https://api.deepseek.com/v1").is_ok());
+    }
+
+    #[test]
+    fn provider_bridge_entries_respects_requested_slugs() {
+        let entries = provider_bridge_entries(&["kimi".into()], None);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "kimi");
+        assert!(entries[0].1.contains("kimi.com"));
+
+        let both = provider_bridge_entries(&["kimi".into(), "deepseek".into()], None);
+        assert_eq!(both.len(), 2);
+        assert_eq!(both[0].0, "kimi");
+        assert_eq!(both[1].0, "deepseek");
+    }
+
+    #[test]
+    fn resolve_api_key_prefers_slug_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::set_var("CRABRIDGE_KIMI_API_KEY", "slug-key");
+            env::remove_var("KIMI_API_KEY");
+        }
+        assert_eq!(
+            resolve_api_key("kimi", ProviderKind::Kimi, None),
+            Some("slug-key".into())
+        );
+        unsafe {
+            env::remove_var("CRABRIDGE_KIMI_API_KEY");
         }
     }
 }

@@ -34,15 +34,15 @@ pub async fn health() -> impl IntoResponse {
 }
 
 /// Codex probes `HEAD/GET {base_url}` for reachability (e.g. `http://127.0.0.1:11435/kimi/v1`).
-pub async fn api_root_default(State(state): State<AppState>) -> impl IntoResponse {
-    api_root_for_provider(&state, state.default_provider.as_str()).await
-}
-
-pub async fn api_root_routed(
+pub async fn api_root(
     State(state): State<AppState>,
-    Path(provider): Path<String>,
+    provider: Option<Path<String>>,
 ) -> impl IntoResponse {
-    api_root_for_provider(&state, &provider).await
+    let slug = provider
+        .as_ref()
+        .map(|p| p.0.as_str())
+        .unwrap_or(state.default_provider.as_str());
+    api_root_for_provider(&state, slug).await
 }
 
 async fn api_root_for_provider(state: &AppState, provider: &str) -> Response {
@@ -53,16 +53,14 @@ async fn api_root_for_provider(state: &AppState, provider: &str) -> Response {
     }
 }
 
-pub async fn handle_models_default(State(state): State<AppState>) -> Response {
-    let provider = state.default_provider.clone();
-    handle_models_inner(state, provider.as_str()).await
-}
-
-pub async fn handle_models_routed(
+pub async fn handle_models(
     State(state): State<AppState>,
-    Path(provider): Path<String>,
+    provider: Option<Path<String>>,
 ) -> Response {
-    handle_models_inner(state, &provider).await
+    let slug = provider
+        .map(|p| p.0)
+        .unwrap_or_else(|| state.default_provider.as_str().to_string());
+    handle_models_inner(state, &slug).await
 }
 
 async fn handle_models_inner(state: AppState, provider: &str) -> Response {
@@ -138,20 +136,15 @@ pub async fn handle_fallback(req: Request) -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
-pub async fn handle_responses_default(
+pub async fn handle_responses(
     State(state): State<AppState>,
+    provider: Option<Path<String>>,
     body: axum::body::Bytes,
 ) -> Response {
-    let provider = state.default_provider.clone();
-    handle_responses_for_provider(state, provider.as_str(), body).await
-}
-
-pub async fn handle_responses_routed(
-    State(state): State<AppState>,
-    Path(provider): Path<String>,
-    body: axum::body::Bytes,
-) -> Response {
-    handle_responses_for_provider(state, &provider, body).await
+    let slug = provider
+        .map(|p| p.0)
+        .unwrap_or_else(|| state.default_provider.as_str().to_string());
+    handle_responses_for_provider(state, &slug, body).await
 }
 
 async fn handle_responses_for_provider(

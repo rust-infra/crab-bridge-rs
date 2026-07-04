@@ -357,7 +357,7 @@ fn migrate_schema(conn: &Connection) -> io::Result<()> {
 }
 
 fn migrate_sessions_table(conn: &Connection) -> io::Result<()> {
-    conn.execute_batch(
+    conn.execute_batch(&format!(
         "
         CREATE TABLE sessions_v2 (
             provider TEXT NOT NULL DEFAULT 'default',
@@ -369,12 +369,12 @@ fn migrate_sessions_table(conn: &Connection) -> io::Result<()> {
             PRIMARY KEY (provider, response_id)
         );
         INSERT INTO sessions_v2 (provider, response_id, created_at_ms, last_used_at_ms, bytes, messages_json)
-            SELECT 'default', response_id, created_at_ms, last_used_at_ms, bytes, messages_json FROM sessions;
+            SELECT '{DEFAULT_PROVIDER}', response_id, created_at_ms, last_used_at_ms, bytes, messages_json FROM sessions;
         DROP TABLE sessions;
         ALTER TABLE sessions_v2 RENAME TO sessions;
         CREATE INDEX IF NOT EXISTS idx_sessions_provider_last_used ON sessions(provider, last_used_at_ms);
-        ",
-    )
+        "
+    ))
     .map_err(io::Error::other)
 }
 
@@ -394,11 +394,13 @@ fn migrate_reasoning_table(conn: &Connection, table: &str) -> io::Result<()> {
             PRIMARY KEY (provider, key)
         );
         INSERT INTO {table}_v2 (provider, key, created_at_ms, last_used_at_ms, bytes, value)
-            SELECT 'default', key, created_at_ms, last_used_at_ms, bytes, value FROM {table};
+            SELECT '{DEFAULT_PROVIDER}', key, created_at_ms, last_used_at_ms, bytes, value FROM {table};
         DROP TABLE {table};
         ALTER TABLE {table}_v2 RENAME TO {table};
         CREATE INDEX IF NOT EXISTS idx_{table}_provider_last_used ON {table}(provider, last_used_at_ms);
-        "
+        ",
+        table = table,
+        DEFAULT_PROVIDER = DEFAULT_PROVIDER,
     );
     conn.execute_batch(&sql).map_err(io::Error::other)
 }

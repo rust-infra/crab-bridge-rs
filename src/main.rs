@@ -4,16 +4,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use axum::{
-    Router,
-    extract::DefaultBodyLimit,
-    routing::{get, post},
-};
 use clap::Parser;
 use crab_bridge_rs::session::{DEFAULT_MAX_SESSION_BYTES, SessionStore};
 use crab_bridge_rs::upstream_request::UpstreamRequestConfig;
 use futures_util::StreamExt;
-use reqwest::{Client, Url};
+use reqwest::Client;
 use tower_governor::{
     GovernorLayer, governor::GovernorConfigBuilder, key_extractor::GlobalKeyExtractor,
 };
@@ -21,15 +16,12 @@ use tower_http::cors::CorsLayer;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+use crab_bridge_rs::app::build_router;
 use crab_bridge_rs::cache::ResponseCache;
 use crab_bridge_rs::codex_config::print_codex_config;
 use crab_bridge_rs::config::{
     ServeOverrides, config_path_from_args, load_config_file, load_config_into_env,
-    resolve_config_path, resolve_serve_providers,
-};
-use crab_bridge_rs::handlers::{
-    api_root_default, api_root_routed, handle_fallback, handle_models_default,
-    handle_models_routed, handle_responses_default, handle_responses_routed, health,
+    resolve_api_key, resolve_config_path, resolve_serve_providers, validate_upstream_url,
 };
 use crab_bridge_rs::opts::{Cli, Commands, ServeArgs, SetupArgs};
 use crab_bridge_rs::prompt::ResponsesSseParser;
@@ -117,7 +109,7 @@ async fn run_serve(serve: ServeArgs) -> Result<()> {
             tracing::warn!(provider = %slug, "skipping provider with no API key");
             continue;
         }
-        let upstream = validate_upstream(&entry.base_url)?;
+        let upstream = validate_upstream_url(&entry.base_url)?;
         providers.insert(
             slug.clone(),
             ProviderRuntime {
@@ -194,18 +186,7 @@ async fn run_serve(serve: ServeArgs) -> Result<()> {
         }
     });
 
-    let mut app = Router::new()
-        .route("/health", get(health))
-        .route("/v1", get(api_root_default))
-        .route("/v1/responses", post(handle_responses_default))
-        .route("/v1/models", get(handle_models_default))
-        .route("/{provider}/v1", get(api_root_routed))
-        .route("/{provider}/v1/responses", post(handle_responses_routed))
-        .route("/{provider}/v1/models", get(handle_models_routed))
-        .fallback(handle_fallback)
-        .layer(DefaultBodyLimit::disable())
-        .layer(CorsLayer::permissive())
-        .with_state(state);
+    let mut app = build_router(state).layer(CorsLayer::permissive());
 
     if rate_limit_rps > 0 {
         let governor_conf = Arc::new(
@@ -321,7 +302,7 @@ async fn run_print_codex_config(
     if slugs.len() > 1 || all_providers || providers.is_some() {
         for slug in &slugs {
             let kind = ProviderKind::from_route(slug).unwrap_or(ProviderKind::Custom);
-            let upstream = validate_upstream(
+            let upstream = validate_upstream_url(
                 &std::env::var(format!(
                     "CRABRIDGE_{}_BASE_URL",
                     slug.to_ascii_uppercase()
@@ -346,7 +327,7 @@ async fn run_print_codex_config(
         }
     } else {
         let kind = ProviderKind::parse(&provider);
-        let upstream = validate_upstream(&base_url)?;
+        let upstream = validate_upstream_url(&base_url)?;
         print_codex_config(
             &client,
             &upstream,
@@ -405,7 +386,7 @@ async fn run_setup(
 
     for (idx, slug) in slugs.iter().enumerate() {
         let provider_kind = ProviderKind::from_route(slug).unwrap_or(ProviderKind::Custom);
-        let resolved_key = setup::resolve_api_key(provider_kind, api_key.clone())?;
+        let resolved_key = resolve_api_key(slug, provider_kind, api_key.clone());
         let result = setup::run_setup(SetupOptions {
             provider: provider_kind,
             provider_slug: slug.clone(),
@@ -415,6 +396,11 @@ async fn run_setup(
             bind_addr,
             write_bridge_config: !codex_only && !is_multi,
             write_multi_bridge_config: !codex_only && is_multi && idx == 0,
+            multi_provider_slugs: if is_multi {
+                Some(slugs.clone())
+            } else {
+                None
+            },
             bridge_config_path: config.clone(),
             force_bridge_config: force_config,
             set_active_codex_provider: !is_multi || idx + 1 == slugs.len(),
@@ -424,16 +410,4 @@ async fn run_setup(
     }
 
     Ok(())
-}
-
-fn validate_upstream(raw: &str) -> Result<Url> {
-    let url = Url::parse(raw.trim_end_matches('/'))?;
-    match url.scheme() {
-        "http" | "https" => {}
-        s => bail!("upstream URL scheme must be http or https, got: {s}"),
-    }
-    if url.host_str().is_none() {
-        bail!("upstream URL must have a host");
-    }
-    Ok(url)
 }
