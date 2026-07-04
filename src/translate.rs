@@ -240,7 +240,7 @@ fn is_glm_like_model(model: &str) -> bool {
 
 /// Map model names via `CRABRIDGE_MODEL_MAP` env var.
 /// Format: `source-model:target-model,source2:target2`
-/// Unmapped Codex model names fall back to the configured default DeepSeek model.
+/// Unmapped Codex model names fall back to the configured default upstream model.
 pub(crate) fn map_model_name(name: &str, default_model: &str) -> String {
     if let Ok(map_str) = std::env::var("CRABRIDGE_MODEL_MAP") {
         for pair in map_str.split(',') {
@@ -254,7 +254,13 @@ pub(crate) fn map_model_name(name: &str, default_model: &str) -> String {
     }
 
     let lower = name.to_ascii_lowercase();
-    if lower.contains("deepseek") {
+    // Pass through known upstream model families unchanged.
+    if lower.contains("deepseek")
+        || lower.contains("kimi")
+        || lower.contains("moonshot")
+        || lower.contains("glm")
+        || lower.contains("zhipu")
+    {
         return name.to_string();
     }
 
@@ -1223,6 +1229,20 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::remove_var("CRABRIDGE_MODEL_MAP") };
         assert_eq!(map_model_name("gpt-5.4", "deepseek-chat"), "deepseek-chat");
+    }
+
+    #[test]
+    fn test_map_model_name_passthrough_kimi_for_coding() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("CRABRIDGE_MODEL_MAP") };
+        assert_eq!(
+            map_model_name("kimi-for-coding", "deepseek-chat"),
+            "kimi-for-coding"
+        );
+        assert_eq!(
+            map_model_name("gpt-5.4", "kimi-for-coding"),
+            "kimi-for-coding"
+        );
     }
 
     #[test]

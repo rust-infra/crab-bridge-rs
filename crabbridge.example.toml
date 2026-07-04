@@ -1,0 +1,43 @@
+# CrabBridge configuration
+# Copy to crabbridge.toml (cwd) or ~/.config/crabbridge/config.toml
+# Priority: CLI flags > environment variables > this file > defaults
+
+# Provider preset: deepseek | kimi (Kimi Code / kimi-for-coding)
+provider = "deepseek"
+
+[upstream]
+# Required for `crabridge serve`
+api_key = "sk-your-api-key-here"
+# Optional overrides (defaults come from provider preset)
+# base_url = "https://api.deepseek.com/v1"
+# model = "deepseek-v4-pro"
+#
+# Kimi Code:
+# provider = "kimi"
+# api_key = "sk-your-kimi-code-key"
+# base_url = "https://api.kimi.com/coding/v1"
+# model = "kimi-for-coding"
+
+[server]
+bind_addr = "127.0.0.1:11435"
+log_level = "info"
+# max_tokens = 4096
+# temperature = 0.7
+
+[session]
+db = "data/crabbridge.db"
+memory_only = false
+# max_sessions = 256
+# ttl_hours = 168
+
+[cache]
+enabled = false
+ttl_secs = 300
+max_entries = 1000
+
+[rate_limit]
+rps = 0
+
+# [advanced]
+# model_map = "gpt-5.4:deepseek-v4-pro,gpt-5.5:deepseek-v4-flash"
+# tool_denylist = "spawn_agent,wait_agent"

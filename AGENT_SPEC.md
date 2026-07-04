@@ -35,7 +35,7 @@ Codex CLI  ──Responses API──▶  CrabBridge  ──Chat Completions─�
 | Response cache | moka |
 | Rate limiting | tower_governor |
 | Logging | tracing + tracing-subscriber |
-| Config | dotenv |
+| Config | TOML (`crabbridge.toml`) |
 | Errors | anyhow + thiserror |
 | CORS | tower-http CorsLayer |
 | SSE parsing | eventsource-stream, async-stream |
@@ -49,7 +49,7 @@ Codex CLI  ──Responses API──▶  CrabBridge  ──Chat Completions─�
 ```
 crab-bridge-rs/
 ├── Cargo.toml
-├── .env.example
+├── crabbridge.example.toml
 ├── .gitignore
 ├── AGENT_SPEC.md
 ├── src/
@@ -359,7 +359,7 @@ Startup order:
 # Build
 cargo build --release
 
-# Run (reads .env)
+# Run (reads crabbridge.toml)
 cargo run -- serve
 
 # Test
@@ -415,7 +415,7 @@ tower-http = "0.6"        # features: cors
 tower_governor = "0.8"
 tracing = "0.1"
 tracing-subscriber = "0.3"  # features: env-filter
-dotenv = "0.15"
+toml = "0.8"
 anyhow = "1"
 thiserror = "2"
 futures-util = "0.3"

@@ -11,7 +11,6 @@ use axum::{
 use clap::Parser;
 use crab_bridge_rs::session::{DEFAULT_MAX_SESSION_BYTES, SessionStore};
 use crab_bridge_rs::upstream_request::UpstreamRequestConfig;
-use dotenv::dotenv;
 use futures_util::StreamExt;
 use reqwest::{Client, Url};
 use tower_governor::{
@@ -23,16 +22,23 @@ use tracing_subscriber::EnvFilter;
 
 use crab_bridge_rs::cache::ResponseCache;
 use crab_bridge_rs::codex_config::print_codex_config;
+use crab_bridge_rs::config::{config_path_from_args, load_config_into_env};
 use crab_bridge_rs::handlers::{
     api_root, handle_fallback, handle_models, handle_responses, health,
 };
-use crab_bridge_rs::opts::{Cli, Commands, ServeArgs};
+use crab_bridge_rs::opts::{Cli, Commands, ServeArgs, SetupArgs};
 use crab_bridge_rs::prompt::ResponsesSseParser;
+use crab_bridge_rs::provider::{bootstrap_upstream_env, ProviderKind};
+use crab_bridge_rs::setup::{self, SetupOptions, print_setup_summary};
 use crab_bridge_rs::state::AppState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    dotenv().ok();
+    // Load crabbridge.toml (or --config / CRABRIDGE_CONFIG) into env before Clap.
+    // Priority: CLI flags > existing env > TOML config > defaults.
+    load_config_into_env(config_path_from_args())?;
+    // Map DEEPSEEK_* / MOONSHOT_* / KIMI_* and CRABRIDGE_PROVIDER into UPSTREAM_*.
+    bootstrap_upstream_env();
 
     let cli = Cli::parse();
 
@@ -50,6 +56,7 @@ async fn main() -> Result<()> {
             model,
             bind_addr,
         } => run_print_codex_config(api_key, base_url, model, bind_addr).await,
+        Commands::Setup(args) => run_setup(args).await,
     }
 }
 
@@ -155,8 +162,10 @@ async fn run_serve(
         .await
         .with_context(|| format!("failed to bind to {bind_addr}"))?;
 
+    let provider = ProviderKind::from_base_url(&base_url);
     info!(
         %bind_addr,
+        provider = provider.label(),
         model = %model,
         upstream = %base_url,
         cache_enabled,
@@ -244,6 +253,51 @@ async fn run_print_codex_config(
     let client = Client::new();
     print_codex_config(&client, &upstream, &api_key, "crabbridge", &model).await;
     eprintln!("// CrabBridge bind address: http://{bind_addr}");
+    Ok(())
+}
+
+async fn run_setup(
+    SetupArgs {
+        provider,
+        api_key,
+        base_url,
+        model,
+        bind_addr,
+        codex_only,
+        force_config,
+        config,
+        docker,
+    }: SetupArgs,
+) -> Result<()> {
+    let provider_kind = ProviderKind::parse(&provider);
+
+    if docker {
+        let resolved_key = setup::resolve_api_key(provider_kind, api_key)?;
+        setup::run_setup_check(setup::SetupCheckOptions {
+            provider: provider_kind,
+            api_key: resolved_key,
+            bridge_config_path: config,
+            bind_addr,
+        })
+        .await?;
+        return Ok(());
+    }
+
+    let resolved_key = setup::resolve_api_key(provider_kind, api_key)?;
+
+    let result = setup::run_setup(SetupOptions {
+        provider: provider_kind,
+        api_key: resolved_key,
+        base_url,
+        model,
+        bind_addr,
+        write_bridge_config: !codex_only,
+        bridge_config_path: config,
+        force_bridge_config: force_config,
+    })
+    .await?;
+
+    print_setup_summary(&result);
     Ok(())
 }
 
