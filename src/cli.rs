@@ -35,8 +35,7 @@ async fn run_print_codex_config(
     }: PrintCodexConfigArgs,
 ) -> Result<()> {
     let client = Client::new();
-    let slugs =
-        ProviderKind::resolve_setup_slugs(all_providers, providers.as_deref(), &provider)?;
+    let slugs = ProviderKind::resolve_setup_slugs(all_providers, providers.as_deref(), &provider)?;
 
     if slugs.len() > 1 || all_providers || providers.is_some() {
         for slug in &slugs {

@@ -1,7 +1,7 @@
 //! Runtime request/cache metrics for the admin dashboard and Prometheus export.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use serde::Serialize;
@@ -141,9 +141,10 @@ impl BridgeMetrics {
         let cache_misses = self.cache_misses.load(Ordering::Relaxed);
         let cache_total = cache_hits + cache_misses;
 
-        let duration_sum: u64 = self.providers.iter().fold(0, |acc, p| {
-            acc + p.duration_ms_sum.load(Ordering::Relaxed)
-        });
+        let duration_sum: u64 = self
+            .providers
+            .iter()
+            .fold(0, |acc, p| acc + p.duration_ms_sum.load(Ordering::Relaxed));
         let duration_count: u64 = self.providers.iter().fold(0, |acc, p| {
             acc + p.duration_ms_count.load(Ordering::Relaxed)
         });
@@ -180,7 +181,9 @@ impl BridgeMetrics {
             snapshot.uptime_secs
         ));
 
-        out.push_str("# HELP crabbridge_requests_total Total HTTP requests handled by the bridge.\n");
+        out.push_str(
+            "# HELP crabbridge_requests_total Total HTTP requests handled by the bridge.\n",
+        );
         out.push_str("# TYPE crabbridge_requests_total counter\n");
         for provider in &snapshot.by_provider {
             out.push_str(&format!(
@@ -193,7 +196,9 @@ impl BridgeMetrics {
             ));
         }
 
-        out.push_str("# HELP crabbridge_request_errors_total Total failed HTTP requests (status >= 400).\n");
+        out.push_str(
+            "# HELP crabbridge_request_errors_total Total failed HTTP requests (status >= 400).\n",
+        );
         out.push_str("# TYPE crabbridge_request_errors_total counter\n");
         for provider in &snapshot.by_provider {
             out.push_str(&format!(
@@ -202,7 +207,9 @@ impl BridgeMetrics {
             ));
         }
 
-        out.push_str("# HELP crabbridge_stream_requests_total Total streaming responses requests.\n");
+        out.push_str(
+            "# HELP crabbridge_stream_requests_total Total streaming responses requests.\n",
+        );
         out.push_str("# TYPE crabbridge_stream_requests_total counter\n");
         for provider in &snapshot.by_provider {
             out.push_str(&format!(
@@ -273,7 +280,9 @@ mod tests {
         assert_eq!(snapshot.cache_misses_total, 1);
 
         let body = metrics.to_prometheus(started);
-        assert!(body.contains("crabbridge_requests_total{provider=\"deepseek\",route=\"responses\"} 1"));
+        assert!(
+            body.contains("crabbridge_requests_total{provider=\"deepseek\",route=\"responses\"} 1")
+        );
         assert!(body.contains("crabbridge_request_errors_total{provider=\"kimi\"} 1"));
         assert!(body.contains("crabbridge_cache_hits_total 1"));
     }

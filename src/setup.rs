@@ -812,7 +812,9 @@ pub fn print_setup_check(report: &SetupCheckReport) {
     }
     println!();
     if report.has_failures() {
-        println!("Quick fix: crabridge-cli setup --provider deepseek   # or --providers kimi,deepseek");
+        println!(
+            "Quick fix: crabridge-cli setup --provider deepseek   # or --providers kimi,deepseek"
+        );
     }
     println!();
 }

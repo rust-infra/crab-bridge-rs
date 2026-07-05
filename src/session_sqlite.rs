@@ -508,7 +508,10 @@ mod tests {
             .touch_reasoning_last_used("call_1", touched)
             .expect("touch reasoning");
 
-        let reasoning = store.read_reasoning("call_1").expect("read reasoning").unwrap();
+        let reasoning = store
+            .read_reasoning("call_1")
+            .expect("read reasoning")
+            .unwrap();
         assert_eq!(reasoning.last_used_at_unix_ms, system_time_millis(touched));
         assert_eq!(reasoning.value, "thinking");
     }
