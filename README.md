@@ -38,7 +38,7 @@ Legacy `/v1/*` routes still work and map to `default_provider`.
 
 ```bash
 cp crabbridge.example.toml crabbridge.toml
-# set upstream.api_key = "sk-..."
+# set DEEPSEEK_API_KEY in your shell, or use [upstream] api_key in TOML
 cargo run -- serve
 ```
 
@@ -153,36 +153,65 @@ Priority: **CLI flags > environment variables > TOML file > defaults**.
 
 Copy `crabbridge.example.toml` to `crabbridge.toml`, or run `crabridge setup`.
 
+Priority: **CLI flags > environment variables > TOML file > defaults**.
+
+### Global config path
+
+| Source | Description |
+|--------|-------------|
+| `--config PATH` | Explicit TOML file path |
+| `CRABRIDGE_CONFIG` | Environment variable pointing to a TOML file |
+| `./crabbridge.toml` | Default filename in the current directory |
+| `~/.config/crabbridge/config.toml` | System default (Windows: `%APPDATA%\crabbridge\config.toml`) |
+
+Config values are loaded **before** CLI parsing, so `env = ...` defaults in CLI flags also honor the TOML file.
+
+### Useful environment variables
+
+| Variable | Description |
+|----------|-------------|
+| `DEEPSEEK_API_KEY` | DeepSeek upstream key (used by Codex `env_key`) |
+| `KIMI_API_KEY` | Kimi Code upstream key (used by Codex `env_key`) |
+| `CRABRIDGE_CONFIG` | Path to `crabbridge.toml` |
+| `CRABRIDGE_{SLUG}_BASE_URL` | Override base URL for a provider, e.g. `CRABRIDGE_DEEPSEEK_BASE_URL` |
+| `CRABRIDGE_{SLUG}_MODEL_MAP` | Per-provider model map |
+| `UPSTREAM_BASE_URL` | Global fallback base URL (also set by legacy `[upstream] base_url`) |
+| `BRIDGE_ADDR` | Server listen address |
+| `SESSION_DB` | SQLite database path |
+| `CRABRIDGE_MODEL_MAP` | Global model map |
+| `CRABRIDGE_TOOL_DENYLIST` | Comma-separated tools to block |
+
 ```toml
 default_provider = "deepseek"
 
 [providers.deepseek]
-api_key = "sk-your-deepseek-key"
 base_url = "https://api.deepseek.com/v1"
-model = "deepseek-v4-pro"
+model_map = "gpt-5.4:deepseek-v4-pro"
 
 [providers.kimi]
-api_key = "sk-your-kimi-code-key"
 base_url = "https://api.kimi.com/coding/v1"
-model = "kimi-for-coding"
+model_map = "gpt-5.4:kimi-for-coding"
 
 [server]
 bind_addr = "127.0.0.1:11435"
 ```
 
-SQLite session/reasoning rows are scoped by `provider` so Kimi and DeepSeek histories do not mix.
+Provider sections support `base_url` (override upstream endpoint) and `model_map` (Codex model name → upstream model name). The legacy `[upstream]` section (`base_url`, `api_key`, `model`) is still supported and is used as a global fallback.
 
-Legacy single-provider TOML (`provider` + `[upstream]`) is still supported.
+API keys are resolved from the Codex request header and forwarded to the matching provider; set them as shell environment variables (e.g. `DEEPSEEK_API_KEY`, `KIMI_API_KEY`).
+
+SQLite session/reasoning rows are scoped by `provider` so Kimi and DeepSeek histories do not mix.
 
 ## CLI
 
 ```bash
-crabridge serve                  # Start the bridge server
-crabridge setup                  # Write Codex + crabbridge.toml
-crabridge setup --docker         # Check current configuration
-crabridge prompt "Hello"         # Send a test request
+crabridge serve                                # Start the bridge server
+crabridge serve --config crabbridge.toml       # Use an explicit config file
+crabridge setup                                # Write Codex + crabbridge.toml
+crabridge setup --docker                       # Check current configuration
+crabridge prompt "Hello"                       # Send a test request
 crabridge prompt "Hello" --stream
-crabridge setup --all-providers # Configure deepseek + kimi at once
+crabridge setup --all-providers                # Configure deepseek + kimi at once
 crabridge prompt "Hello" --provider kimi
 crabridge print-codex-config --all-providers
 ```

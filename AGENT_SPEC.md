@@ -112,15 +112,15 @@ Loads `crabbridge.toml` and resolves the provider map for `serve`:
 default_provider = "deepseek"
 
 [providers.deepseek]
-api_key = "sk-..."
 base_url = "https://api.deepseek.com/v1"
-model = "deepseek-v4-pro"
+model_map = "gpt-5.4:deepseek-v4-pro"
 
 [providers.kimi]
-api_key = "sk-..."
 base_url = "https://api.kimi.com/coding/v1"
-model = "kimi-for-coding"
+model_map = "gpt-5.4:kimi-for-coding"
 ```
+
+Provider sections support `base_url` (upstream endpoint override) and `model_map` (per-provider model mapping). The legacy `[upstream]` section (`base_url`, `api_key`, `model`) is still supported as a global fallback.
 
 If no TOML is present but `DEEPSEEK_API_KEY` and/or `KIMI_API_KEY` are set, providers are auto-discovered from env.
 
@@ -164,6 +164,7 @@ pub struct AppState {
 3. `translate::to_chat_request()` with per-provider `default_model` and `model_map`
 4. POST upstream `/chat/completions` with that provider's API key
 5. Stream or blocking response back to Responses format
+   - For streaming, the upstream request is made before the HTTP response starts, so upstream errors return proper HTTP status codes (401/502/504) instead of an always-200 SSE stream
 
 ### 4.5 `src/translate.rs`
 
@@ -227,6 +228,8 @@ Maps to `default_provider` from config.
 
 Search order: `--config` / `CRABRIDGE_CONFIG` → `./crabbridge.toml` → `~/.config/crabbridge/config.toml`.
 
+The config file is loaded and applied to environment variables **before** the full CLI is parsed, so `env = ...` defaults in Clap flags also honor TOML values.
+
 See `crabbridge.example.toml` for the full schema (`[server]`, `[session]`, `[cache]`, `[advanced]`).
 
 ### 6.2 Environment variables
@@ -235,11 +238,17 @@ See `crabbridge.example.toml` for the full schema (`[server]`, `[session]`, `[ca
 |----------|-------------|
 | `DEEPSEEK_API_KEY` | DeepSeek upstream key |
 | `KIMI_API_KEY` | Kimi Code upstream key |
+| `CRABRIDGE_CONFIG` | Path to `crabbridge.toml` |
 | `CRABRIDGE_{SLUG}_API_KEY` | Per-provider override from TOML |
+| `CRABRIDGE_{SLUG}_BASE_URL` | Per-provider base URL override |
+| `CRABRIDGE_{SLUG}_MODEL_MAP` | Per-provider model map |
+| `UPSTREAM_BASE_URL` | Global fallback base URL (also set by legacy `[upstream] base_url`) |
 | `BRIDGE_ADDR` | Listen address (default `127.0.0.1:11435`) |
 | `SESSION_DB` | SQLite path (default `data/crabbridge.db`) |
 | `CRABRIDGE_MODEL_MAP` | Global model map (`gpt-5.4:deepseek-v4-pro,…`) |
 | `CRABRIDGE_TOOL_DENYLIST` | Comma-separated tools to block |
+
+Empty string values are treated as unset, so a `CRABRIDGE_*` env var with `=""` will not override a TOML value.
 
 Codex still needs `DEEPSEEK_API_KEY` / `KIMI_API_KEY` in the **shell** (`env_key` in Codex config) — separate from bridge TOML.
 
@@ -249,6 +258,7 @@ Codex still needs `DEEPSEEK_API_KEY` / `KIMI_API_KEY` in the **shell** (`env_key
 
 ```bash
 crabridge serve
+crabridge serve --config crabbridge.toml
 crabridge setup --all-providers
 crabridge setup --docker
 crabridge prompt "Hello" --provider deepseek
