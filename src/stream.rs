@@ -12,6 +12,7 @@ use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    metrics::BridgeMetrics,
     provider::{ProviderKind, apply_upstream_headers},
     session::SessionStore,
     translate::{NamespaceToolMap, response_function_name_for_responses},
@@ -35,6 +36,7 @@ pub struct StreamArgs {
     pub namespace_tools: NamespaceToolMap,
     pub model: String,
     pub started: Instant,
+    pub metrics: Arc<BridgeMetrics>,
 }
 
 struct ToolCallAccum {
@@ -185,6 +187,7 @@ pub fn translate_stream(
         namespace_tools,
         model,
         started,
+        metrics: _metrics,
     } = args;
     let msg_item_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
     let reasoning_item_id = format!("rs_{}", uuid::Uuid::new_v4().simple());

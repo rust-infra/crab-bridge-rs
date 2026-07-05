@@ -3,7 +3,12 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+use crate::config::DEFAULT_CONFIG_NAME;
 use crate::session::{DEFAULT_MAX_SESSIONS, DEFAULT_SESSION_TTL};
+
+fn default_config_file() -> PathBuf {
+    PathBuf::from(DEFAULT_CONFIG_NAME)
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -17,9 +22,10 @@ pub struct Cli {
         long,
         global = true,
         env = "CRABRIDGE_CONFIG",
-        value_name = "FILE"
+        value_name = "FILE",
+        default_value_os_t = default_config_file()
     )]
-    pub config: Option<PathBuf>,
+    pub config: PathBuf,
 
     #[command(subcommand)]
     pub command: Commands,

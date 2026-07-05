@@ -29,6 +29,7 @@ pub struct BridgeConfigFile {
     #[serde(default, alias = "rate_limit")]
     pub rate_limit: Option<RateLimitSection>,
     pub advanced: Option<AdvancedSection>,
+    pub admin: Option<AdminSection>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -81,6 +82,18 @@ pub struct AdvancedSection {
     pub tool_denylist: Option<String>,
 }
 
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct AdminSection {
+    pub enabled: Option<bool>,
+}
+
+/// Whether `/admin` and `/metrics` routes are mounted (default: true).
+pub fn admin_enabled(cfg: Option<&BridgeConfigFile>) -> bool {
+    cfg.and_then(|c| c.admin.as_ref())
+        .and_then(|a| a.enabled)
+        .unwrap_or(true)
+}
+
 /// Resolved provider entry for one route slug.
 #[derive(Debug, Clone)]
 pub struct ProviderEntry {
@@ -117,15 +130,61 @@ pub fn default_config_write_path(explicit: Option<PathBuf>) -> PathBuf {
     explicit.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_NAME))
 }
 
+/// Read `--config` / `-c` from argv before Clap runs.
+///
+/// Must stay in sync with the global `--config` flag on `Cli` in `opts.rs`.
+pub fn explicit_config_from_argv() -> Option<PathBuf> {
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            break;
+        }
+        if arg == "--config" {
+            return args.next().map(PathBuf::from);
+        }
+        if let Some(value) = arg.strip_prefix("--config=") {
+            return Some(PathBuf::from(value));
+        }
+        if arg == "-c" {
+            return args.next().map(PathBuf::from);
+        }
+        if arg.starts_with("-c") && arg.len() > 2 {
+            return Some(PathBuf::from(&arg[2..]));
+        }
+    }
+    None
+}
+
+pub fn explicit_config_from_env() -> Option<PathBuf> {
+    env::var("CRABRIDGE_CONFIG")
+        .ok()
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Explicit config path before Clap parsing (`--config` / `-c` / `CRABRIDGE_CONFIG`).
+pub fn explicit_config_before_cli() -> Option<PathBuf> {
+    explicit_config_from_argv().or_else(explicit_config_from_env)
+}
+
+/// Explicit config path after Clap parsing (global `--config` on `Cli`).
+pub fn explicit_config_from_cli(cli: Option<PathBuf>) -> Option<PathBuf> {
+    cli.filter(|p| !p.as_os_str().is_empty())
+}
+
+/// Whether the user set `--config` / `-c` or `CRABRIDGE_CONFIG` (not Clap's default).
+pub fn config_explicitly_requested() -> bool {
+    explicit_config_from_argv().is_some() || explicit_config_from_env().is_some()
+}
+
 /// Resolve config path: `--config` / `CRABRIDGE_CONFIG`, then cwd, then user config dir.
 pub fn resolve_config_path(explicit: Option<PathBuf>) -> Option<PathBuf> {
-    if let Some(path) = explicit {
-        return Some(path);
+    if config_explicitly_requested() {
+        return explicit.or_else(explicit_config_from_env);
     }
-    if let Ok(path) = env::var("CRABRIDGE_CONFIG") {
-        let path = PathBuf::from(path);
-        if !path.as_os_str().is_empty() {
-            return Some(path);
+    if let Some(path) = &explicit {
+        if path.as_os_str() != DEFAULT_CONFIG_NAME {
+            return Some(path.clone());
         }
     }
     let cwd = PathBuf::from(DEFAULT_CONFIG_NAME);
@@ -160,7 +219,7 @@ pub fn user_config_path() -> PathBuf {
 /// Load config and apply values into the process environment (only for unset keys).
 /// Priority after this: CLI flags > existing env > config file > defaults.
 pub fn load_config_into_env(explicit: Option<PathBuf>) -> Result<Option<PathBuf>> {
-    let explicit_requested = explicit.is_some() || env::var_os("CRABRIDGE_CONFIG").is_some();
+    let explicit_requested = config_explicitly_requested();
     let Some(path) = resolve_config_path(explicit) else {
         return Ok(None);
     };
@@ -524,6 +583,44 @@ default_provider = "kimi"
         assert_eq!(resolved.providers.len(), 2);
         assert!(resolved.providers.contains_key("deepseek"));
         assert!(resolved.providers.contains_key("kimi"));
+    }
+
+    #[test]
+    fn explicit_config_from_cli_rejects_empty() {
+        assert!(explicit_config_from_cli(None).is_none());
+        assert!(explicit_config_from_cli(Some(PathBuf::from(""))).is_none());
+        assert_eq!(
+            explicit_config_from_cli(Some(PathBuf::from("crabbridge.toml"))),
+            Some(PathBuf::from("crabbridge.toml"))
+        );
+    }
+
+    #[test]
+    fn explicit_config_before_cli_prefers_argv_over_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            env::set_var("CRABRIDGE_CONFIG", "/from/env.toml");
+        }
+        // Cannot override process argv in unit tests; env-only fallback:
+        assert_eq!(
+            explicit_config_from_env(),
+            Some(PathBuf::from("/from/env.toml"))
+        );
+        unsafe {
+            env::remove_var("CRABRIDGE_CONFIG");
+        }
+    }
+
+    #[test]
+    fn admin_enabled_defaults_true() {
+        assert!(admin_enabled(None));
+        assert!(admin_enabled(Some(&BridgeConfigFile::default())));
+        assert!(!admin_enabled(Some(&BridgeConfigFile {
+            admin: Some(AdminSection {
+                enabled: Some(false),
+            }),
+            ..Default::default()
+        })));
     }
 
     #[test]

@@ -1,8 +1,10 @@
+pub mod admin;
 pub mod app;
 pub mod cache;
 pub mod codex_config;
 pub mod config;
 pub mod handlers;
+pub mod metrics;
 pub mod opts;
 pub mod prompt;
 pub mod provider;

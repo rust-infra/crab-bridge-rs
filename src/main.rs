@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -20,55 +20,31 @@ use crab_bridge_rs::app::build_router;
 use crab_bridge_rs::cache::ResponseCache;
 use crab_bridge_rs::codex_config::print_codex_config;
 use crab_bridge_rs::config::{
-    default_config_write_path, load_config_file, load_config_into_env, resolve_api_key,
+    admin_enabled, default_config_write_path, explicit_config_before_cli,
+    explicit_config_from_cli, load_config_file, load_config_into_env, resolve_api_key,
     resolve_config_path, resolve_serve_providers, validate_upstream_url,
 };
+use crab_bridge_rs::metrics::BridgeMetrics;
 use crab_bridge_rs::opts::{Cli, Commands, ServeArgs, SetupArgs};
 use crab_bridge_rs::prompt::ResponsesSseParser;
 use crab_bridge_rs::provider::{ProviderKind, bootstrap_upstream_env};
 use crab_bridge_rs::setup::{self, SetupOptions, print_setup_summary};
 use crab_bridge_rs::state::{AppState, ProviderRuntime};
 
-fn config_path_from_args() -> Option<std::path::PathBuf> {
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        if arg == "--" {
-            break;
-        }
-        if arg == "--config" {
-            return args.next().map(std::path::PathBuf::from);
-        }
-        if let Some(value) = arg.strip_prefix("--config=") {
-            return Some(std::path::PathBuf::from(value));
-        }
-        if arg == "-c" {
-            return args.next().map(std::path::PathBuf::from);
-        }
-        if arg.starts_with("-c") && arg.len() > 2 {
-            return Some(std::path::PathBuf::from(&arg[2..]));
-        }
-    }
-    None
-}
-
 fn main() -> Result<()> {
-    let config_path = config_path_from_args().or_else(|| {
-        std::env::var("CRABRIDGE_CONFIG")
-            .ok()
-            .map(std::path::PathBuf::from)
-    });
-    load_config_into_env(config_path)?;
+    load_config_into_env(explicit_config_before_cli())?;
     bootstrap_upstream_env();
     let cli = Cli::parse();
+    let config_path = explicit_config_from_cli(Some(cli.config.clone()));
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(async_main(cli))
+        .block_on(async_main(cli, config_path))
 }
 
-async fn async_main(cli: Cli) -> Result<()> {
+async fn async_main(cli: Cli, config_path: Option<std::path::PathBuf>) -> Result<()> {
     match cli.command {
-        Commands::Serve(serve) => run_serve(serve, cli.config.clone()).await,
+        Commands::Serve(serve) => run_serve(serve, config_path).await,
         Commands::Prompt {
             message,
             stream,
@@ -96,7 +72,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             )
             .await
         }
-        Commands::Setup(args) => run_setup(args, cli.config).await,
+        Commands::Setup(args) => run_setup(args, config_path).await,
     }
 }
 
@@ -120,14 +96,18 @@ async fn run_serve(serve: ServeArgs, config_path: Option<std::path::PathBuf>) ->
         .with_env_filter(EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
 
+    let started_at = Instant::now();
+    let metrics = BridgeMetrics::new();
     let resolved_path = resolve_config_path(config_path);
-    let cfg = resolved_path
-        .as_ref()
-        .and_then(|path| load_config_file(path).ok());
-    if let Some(path) = &resolved_path {
-        info!(config = %path.display(), "using bridge config");
-    }
+    let cfg = match &resolved_path {
+        Some(path) => {
+            info!(config = %path.display(), "using bridge config");
+            Some(load_config_file(path)?)
+        }
+        None => None,
+    };
     let resolved = resolve_serve_providers(cfg.as_ref())?;
+    let admin_enabled = admin_enabled(cfg.as_ref());
 
     let mut providers = HashMap::new();
     for (slug, entry) in &resolved.providers {
@@ -169,7 +149,7 @@ async fn run_serve(serve: ServeArgs, config_path: Option<std::path::PathBuf>) ->
     } else {
         providers
             .keys()
-            .next()
+            .min()
             .cloned()
             .context("no default provider available")?
     };
@@ -213,6 +193,8 @@ async fn run_serve(serve: ServeArgs, config_path: Option<std::path::PathBuf>) ->
         default_provider: default_provider.clone(),
         upstream_request,
         cache,
+        metrics,
+        started_at,
     };
 
     tokio::spawn(async move {
@@ -223,7 +205,7 @@ async fn run_serve(serve: ServeArgs, config_path: Option<std::path::PathBuf>) ->
         }
     });
 
-    let mut app = build_router(state).layer(CorsLayer::permissive());
+    let mut app = build_router(state, admin_enabled).layer(CorsLayer::permissive());
 
     if rate_limit_rps > 0 {
         let governor_conf = Arc::new(
@@ -248,6 +230,7 @@ async fn run_serve(serve: ServeArgs, config_path: Option<std::path::PathBuf>) ->
         default_provider = %default_provider,
         providers = ?provider_list,
         cache_enabled,
+        admin_enabled,
         "CrabBridge listening for Codex Responses API"
     );
 

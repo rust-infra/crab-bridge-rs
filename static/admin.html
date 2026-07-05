@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CrabBridge Admin</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f1419;
+      --card: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b9cb3;
+      --accent: #ff6b35;
+      --ok: #3dd68c;
+      --warn: #f5a524;
+      --err: #ff6b6b;
+      --border: #2a3648;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 0; font-size: 1.25rem; }
+    .sub { color: var(--muted); font-size: 0.875rem; }
+    main { padding: 1.5rem; max-width: 1200px; margin: 0 auto; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+    }
+    .card h2 {
+      margin: 0 0 0.5rem;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    .value { font-size: 1.75rem; font-weight: 700; }
+    .value.small { font-size: 1rem; font-weight: 600; }
+    section { margin-bottom: 1.5rem; }
+    section > h2 {
+      margin: 0 0 0.75rem;
+      font-size: 1rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+    th { color: var(--muted); font-weight: 600; }
+    .bar-row { margin-bottom: 0.5rem; }
+    .bar-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8125rem;
+      margin-bottom: 0.25rem;
+    }
+    .bar {
+      height: 8px;
+      background: #243044;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .bar > span {
+      display: block;
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), #ffb347);
+      border-radius: 999px;
+    }
+    .pill {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      border-radius: 999px;
+      background: #243044;
+      font-size: 0.75rem;
+    }
+    .err-text { color: var(--err); }
+    #status.ok { color: var(--ok); }
+    #status.err { color: var(--err); }
+    a { color: var(--accent); }
+    .metrics-pre {
+      margin: 0;
+      padding: 1rem;
+      background: #121821;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.8125rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 320px;
+      overflow: auto;
+      color: #d7e0ec;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>CrabBridge Admin</h1>
+      <div class="sub">Local dashboard · <span id="version">—</span></div>
+    </div>
+    <div class="sub">Status: <span id="status" class="ok">loading</span> · Updated <span id="updated">—</span></div>
+  </header>
+  <main>
+    <div class="grid" id="summary-cards"></div>
+
+    <section>
+      <h2>Requests by provider</h2>
+      <div id="provider-bars"></div>
+    </section>
+
+    <section>
+      <h2>Providers</h2>
+      <table>
+        <thead>
+          <tr><th>Slug</th><th>Upstream</th><th>Default model</th></tr>
+        </thead>
+        <tbody id="providers-table"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Recent sessions</h2>
+      <table>
+        <thead>
+          <tr><th>Response ID</th><th>Provider</th><th>Bytes</th><th>Last used</th></tr>
+        </thead>
+        <tbody id="sessions-table"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Prometheus export</h2>
+      <p class="sub">Request counters reset on process restart; session totals include persisted SQLite data.</p>
+      <pre id="metrics-export" class="metrics-pre">Loading /metrics…</pre>
+      <p class="sub"><a href="/metrics">Open metrics page</a> · <a href="/metrics?format=text">Raw text for scrapers</a></p>
+    </section>
+  </main>
+  <script>
+    function fmtBytes(n) {
+      if (n < 1024) return n + " B";
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+      return (n / (1024 * 1024)).toFixed(1) + " MB";
+    }
+    function fmtUptime(secs) {
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      const s = secs % 60;
+      if (h > 0) return `${h}h ${m}m`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
+    }
+    function fmtTime(ms) {
+      if (!ms) return "—";
+      return new Date(Number(ms)).toLocaleString();
+    }
+    function pct(num, den) {
+      if (!den) return "0%";
+      return ((num / den) * 100).toFixed(1) + "%";
+    }
+    function render(data) {
+      document.getElementById("version").textContent = "v" + data.version;
+      document.getElementById("status").textContent = "ok";
+      document.getElementById("status").className = "ok";
+      document.getElementById("updated").textContent = new Date().toLocaleTimeString();
+
+      const m = data.metrics;
+      const s = data.sessions;
+      const c = data.cache;
+      const cards = [
+        ["Uptime", fmtUptime(m.uptime_secs)],
+        ["Requests", m.requests_total.toLocaleString()],
+        ["Errors", m.errors_total.toLocaleString()],
+        ["Error rate", pct(m.errors_total, m.requests_total)],
+        ["Avg latency", m.avg_duration_ms.toFixed(0) + " ms"],
+        ["Stream reqs", m.stream_requests_total.toLocaleString()],
+        ["Sessions", s.session_count.toLocaleString()],
+        ["Stored", fmtBytes(s.stored_bytes)],
+        ["Cache hit", pct(m.cache_hits_total, m.cache_hits_total + m.cache_misses_total)],
+        ["Cache entries", c.enabled ? c.entry_count.toLocaleString() : "disabled"],
+      ];
+      document.getElementById("summary-cards").innerHTML = cards.map(([label, value]) =>
+        `<div class="card"><h2>${label}</h2><div class="value">${value}</div></div>`
+      ).join("");
+
+      const maxReq = Math.max(1, ...m.by_provider.map(p => p.requests_total));
+      document.getElementById("provider-bars").innerHTML = m.by_provider.map(p => {
+        const width = (p.requests_total / maxReq) * 100;
+        return `<div class="bar-row">
+          <div class="bar-label"><span>${p.provider}</span><span>${p.requests_total} req · ${p.errors_total} err · ${p.avg_duration_ms.toFixed(0)} ms avg</span></div>
+          <div class="bar"><span style="width:${width}%"></span></div>
+        </div>`;
+      }).join("");
+
+      document.getElementById("providers-table").innerHTML = data.providers.map(p =>
+        `<tr><td><span class="pill">${p.slug}</span></td><td>${p.upstream}</td><td>${p.default_model}</td></tr>`
+      ).join("");
+
+      document.getElementById("sessions-table").innerHTML = s.recent_sessions.length
+        ? s.recent_sessions.map(row =>
+            `<tr><td><code>${row.response_id}</code></td><td>${row.provider}</td><td>${fmtBytes(row.bytes)}</td><td>${fmtTime(row.last_used_at_unix_ms)}</td></tr>`
+          ).join("")
+        : `<tr><td colspan="4" class="sub">No sessions yet</td></tr>`;
+    }
+    async function refreshMetrics() {
+      const el = document.getElementById("metrics-export");
+      try {
+        const res = await fetch("/metrics?format=text");
+        if (!res.ok) throw new Error(res.statusText);
+        const text = await res.text();
+        el.textContent = text || "(empty metrics body)";
+      } catch (err) {
+        el.textContent = "Failed to load /metrics: " + err;
+        el.classList.add("err-text");
+      }
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch("/admin/api/overview");
+        if (!res.ok) throw new Error(res.statusText);
+        render(await res.json());
+      } catch (err) {
+        document.getElementById("status").textContent = String(err);
+        document.getElementById("status").className = "err";
+      }
+    }
+
+    refresh();
+    refreshMetrics();
+    setInterval(refresh, 3000);
+    setInterval(refreshMetrics, 3000);
+  </script>
+</body>
+</html>

@@ -14,6 +14,28 @@ use crate::types::ChatMessage;
 pub const DEFAULT_MAX_SESSIONS: usize = 256;
 pub const DEFAULT_MAX_SESSION_BYTES: usize = 512 * 1024 * 1024;
 pub const DEFAULT_SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const RECENT_SESSIONS_LIMIT: usize = 20;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionSummary {
+    pub response_id: String,
+    pub provider: String,
+    pub bytes: usize,
+    pub last_used_at_unix_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionStats {
+    pub session_count: usize,
+    pub reasoning_count: usize,
+    pub turn_reasoning_count: usize,
+    pub stored_bytes: usize,
+    pub max_sessions: usize,
+    pub max_stored_bytes: usize,
+    pub ttl_hours: u64,
+    pub by_provider: HashMap<String, u64>,
+    pub recent_sessions: Vec<SessionSummary>,
+}
 
 /// Maps response_id → accumulated message history for that session.
 /// Codex uses `previous_response_id` to continue a conversation; we maintain
@@ -264,6 +286,12 @@ impl SessionStore {
         let mut state = self.state.lock().expect("session store mutex poisoned");
         state.enforce_limits();
     }
+
+    /// Aggregate session-store statistics for the admin dashboard.
+    pub fn stats(&self) -> SessionStats {
+        let state = self.state.lock().expect("session store mutex poisoned");
+        state.snapshot_stats()
+    }
 }
 
 impl Default for SessionStore {
@@ -273,6 +301,38 @@ impl Default for SessionStore {
 }
 
 impl SessionState {
+    fn snapshot_stats(&self) -> SessionStats {
+        let mut by_provider: HashMap<String, u64> = HashMap::new();
+        for entry in self.sessions.values() {
+            *by_provider.entry(entry.provider.clone()).or_default() += 1;
+        }
+
+        let mut recent: Vec<SessionSummary> = self
+            .sessions
+            .iter()
+            .map(|(id, entry)| SessionSummary {
+                response_id: id.clone(),
+                provider: entry.provider.clone(),
+                bytes: entry.bytes,
+                last_used_at_unix_ms: system_time_millis(entry.last_used_at),
+            })
+            .collect();
+        recent.sort_by(|a, b| b.last_used_at_unix_ms.cmp(&a.last_used_at_unix_ms));
+        recent.truncate(RECENT_SESSIONS_LIMIT);
+
+        SessionStats {
+            session_count: self.sessions.len(),
+            reasoning_count: self.reasoning.len(),
+            turn_reasoning_count: self.turn_reasoning.len(),
+            stored_bytes: self.stored_bytes,
+            max_sessions: self.max_sessions,
+            max_stored_bytes: self.max_stored_bytes,
+            ttl_hours: self.ttl.as_secs() / 3600,
+            by_provider,
+            recent_sessions: recent,
+        }
+    }
+
     fn load_sqlite_index(&mut self) {
         let Some(sqlite) = &self.sqlite else {
             return;
@@ -781,6 +841,18 @@ mod tests {
         let id2 = store.new_id();
         store.save_with_id(TEST_PROVIDER, id2.clone(), vec![msg("user", Some("q"))]);
         assert_eq!(store.get_history(&id2).len(), 1);
+    }
+
+    #[test]
+    fn stats_reports_sessions_and_providers() {
+        let store = SessionStore::new();
+        store.save("deepseek", vec![msg("user", Some("a"))]);
+        store.save("kimi", vec![msg("user", Some("b"))]);
+        let stats = store.stats();
+        assert_eq!(stats.session_count, 2);
+        assert_eq!(stats.by_provider.get("deepseek"), Some(&1));
+        assert_eq!(stats.by_provider.get("kimi"), Some(&1));
+        assert_eq!(stats.recent_sessions.len(), 2);
     }
 
     #[test]

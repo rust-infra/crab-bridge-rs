@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use reqwest::{Client, Url};
 
 use crate::cache::SharedResponseCache;
+use crate::metrics::BridgeMetrics;
 use crate::session::SessionStore;
 use crate::upstream_request::UpstreamRequestConfig;
 
@@ -23,6 +25,8 @@ pub struct AppState {
     pub default_provider: Arc<String>,
     pub upstream_request: Arc<UpstreamRequestConfig>,
     pub cache: Option<SharedResponseCache>,
+    pub metrics: Arc<BridgeMetrics>,
+    pub started_at: Instant,
 }
 
 impl AppState {

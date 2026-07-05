@@ -13,6 +13,7 @@ use serde_json::json;
 use tracing::{debug, error, info, warn};
 
 use crate::cache::ResponseCache;
+use crate::metrics::BridgeMetrics;
 use crate::provider::{ProviderKind, apply_upstream_headers};
 use crate::state::{AppState, ProviderRuntime};
 use crate::stream::{self, StreamArgs};
@@ -21,6 +22,23 @@ use crate::translate::TranslationOptions;
 use crate::types::*;
 
 const DEBUG_NAME_LIMIT: usize = 80;
+
+fn record_http_outcome(
+    metrics: &BridgeMetrics,
+    provider: &str,
+    route: &str,
+    status: StatusCode,
+    started: Instant,
+    stream: bool,
+) {
+    metrics.record_request(
+        provider,
+        route,
+        status.as_u16(),
+        started.elapsed().as_millis() as u64,
+        stream,
+    );
+}
 
 /// Read `Authorization: Bearer …` from an incoming Codex request.
 fn bearer_token_from_headers(headers: &HeaderMap) -> Option<String> {
@@ -89,12 +107,22 @@ pub async fn handle_models(
 }
 
 async fn handle_models_inner(state: AppState, provider: &str, headers: &HeaderMap) -> Response {
+    let started = Instant::now();
     let Some(runtime) = state.provider(provider) else {
-        return (
+        let response = (
             StatusCode::NOT_FOUND,
             format!("unknown provider: {provider}"),
         )
             .into_response();
+        record_http_outcome(
+            &state.metrics,
+            provider,
+            "models",
+            StatusCode::NOT_FOUND,
+            started,
+            false,
+        );
+        return response;
     };
     info!(provider, "GET /{provider}/v1/models");
     let kind = ProviderKind::from_route(provider).unwrap_or(ProviderKind::Custom);
@@ -157,12 +185,21 @@ async fn handle_models_inner(state: AppState, provider: &str, headers: &HeaderMa
         }));
     }
 
-    Json(json!({
+    let response = Json(json!({
         "object": "list",
         "data": list.clone(),
         "models": list,
     }))
-    .into_response()
+    .into_response();
+    record_http_outcome(
+        &state.metrics,
+        provider,
+        "models",
+        StatusCode::OK,
+        started,
+        false,
+    );
+    response
 }
 
 pub async fn handle_fallback(req: Request) -> Response {
@@ -189,11 +226,20 @@ async fn handle_responses_for_provider(
     body: axum::body::Bytes,
 ) -> Response {
     let Some(runtime) = state.provider(provider) else {
-        return (
+        let response = (
             StatusCode::NOT_FOUND,
             format!("unknown provider: {provider}"),
         )
             .into_response();
+        record_http_outcome(
+            &state.metrics,
+            provider,
+            "responses",
+            StatusCode::NOT_FOUND,
+            Instant::now(),
+            false,
+        );
+        return response;
     };
 
     let started = Instant::now();
@@ -213,7 +259,19 @@ async fn handle_responses_for_provider(
                 "body prefix: {}",
                 String::from_utf8_lossy(&body[..body.len().min(200)])
             );
-            return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response();
+            return {
+                let response =
+                    (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response();
+                record_http_outcome(
+                    &state.metrics,
+                    provider,
+                    "responses",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    started,
+                    false,
+                );
+                response
+            };
         }
     };
     let input_items = match &req.input {
@@ -288,11 +346,20 @@ async fn handle_responses_inner(
     );
     let url = format!("{}chat/completions", join_base(&runtime.upstream));
     let Some(api_key) = upstream_api_key(headers) else {
-        return (
+        let response = (
             StatusCode::UNAUTHORIZED,
             "missing Authorization: Bearer token (set Codex env_key in shell)",
         )
             .into_response();
+        record_http_outcome(
+            &state.metrics,
+            provider,
+            "responses",
+            StatusCode::UNAUTHORIZED,
+            started,
+            false,
+        );
+        return response;
     };
 
     if req.stream {
@@ -312,23 +379,56 @@ async fn handle_responses_inner(
             namespace_tools,
             model,
             started,
+            metrics: state.metrics.clone(),
         };
-        match stream::prepare_upstream(&args).await {
-            Ok(upstream) => stream::translate_stream(args, upstream).into_response(),
+        let response = match stream::prepare_upstream(&args).await {
+            Ok(upstream) => {
+                record_http_outcome(
+                    &state.metrics,
+                    provider,
+                    "responses",
+                    StatusCode::OK,
+                    started,
+                    true,
+                );
+                stream::translate_stream(args, upstream).into_response()
+            }
             Err(stream::UpstreamError::BodyError(msg)) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+                let response = (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response();
+                record_http_outcome(
+                    &state.metrics,
+                    provider,
+                    "responses",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    started,
+                    true,
+                );
+                response
             }
             Err(stream::UpstreamError::ConnectionError(msg)) => {
-                (StatusCode::BAD_GATEWAY, msg).into_response()
+                let response = (StatusCode::BAD_GATEWAY, msg).into_response();
+                record_http_outcome(
+                    &state.metrics,
+                    provider,
+                    "responses",
+                    StatusCode::BAD_GATEWAY,
+                    started,
+                    true,
+                );
+                response
             }
             Err(stream::UpstreamError::UpstreamError { status, body }) => {
                 let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
-                (status, body).into_response()
+                let response = (status, body).into_response();
+                record_http_outcome(&state.metrics, provider, "responses", status, started, true);
+                response
             }
-        }
+        };
+        return response;
     } else {
         chat_req.stream = false;
-        handle_blocking(BlockingArgs {
+        let metrics = state.metrics.clone();
+        let response = handle_blocking(BlockingArgs {
             state,
             provider: provider.to_string(),
             api_key,
@@ -338,7 +438,17 @@ async fn handle_responses_inner(
             namespace_tools,
             started,
         })
-        .await
+        .await;
+        let status = response.status();
+        record_http_outcome(
+            &metrics,
+            provider,
+            "responses",
+            status,
+            started,
+            false,
+        );
+        response
     }
 }
 
@@ -548,6 +658,7 @@ async fn handle_blocking(args: BlockingArgs) -> Response {
     {
         let key = ResponseCache::cache_key(&provider, &url, &api_key, &body);
         if let Some(cached) = cache.get(&key).await {
+            state.metrics.record_cache_hit();
             info!(
                 provider,
                 cache_key = %key,
@@ -561,6 +672,7 @@ async fn handle_blocking(args: BlockingArgs) -> Response {
             )
                 .into_response();
         }
+        state.metrics.record_cache_miss();
     }
 
     let kind = ProviderKind::from_route(&provider).unwrap_or(ProviderKind::Custom);

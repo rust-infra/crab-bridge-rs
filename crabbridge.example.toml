@@ -46,6 +46,9 @@ max_entries = 1000
 [rate_limit]
 rps = 0
 
+[admin]
+enabled = true
+
 # [advanced]
 # model_map = "gpt-5.4:deepseek-v4-pro,gpt-5.5:deepseek-v4-flash"
 # tool_denylist = "spawn_agent,wait_agent"
