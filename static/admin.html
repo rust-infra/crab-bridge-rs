@@ -122,8 +122,8 @@
       border: 1px solid var(--border);
       border-radius: 12px;
       width: 100%;
-      max-width: 800px;
-      max-height: 80vh;
+      max-width: 920px;
+      max-height: 85vh;
       display: flex;
       flex-direction: column;
     }
@@ -134,11 +134,14 @@
       justify-content: space-between;
       align-items: center;
       gap: 1rem;
+      flex-shrink: 0;
     }
     .modal-header h3 { margin: 0; font-size: 1rem; }
     .modal-body {
-      padding: 1rem 1.25rem;
-      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
     }
     .modal-close {
       background: transparent;
@@ -147,30 +150,184 @@
       font-size: 1.25rem;
       cursor: pointer;
     }
-    .message {
-      margin-bottom: 1rem;
-      padding: 0.75rem 1rem;
-      background: #121821;
+    .chat-session-meta {
+      padding: 0.75rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8125rem;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+    .chat-thread {
+      flex: 1;
+      overflow: auto;
+      padding: 1rem 1.25rem 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.875rem;
+      background: #0c1017;
+    }
+    .chat-row {
+      display: flex;
+      width: 100%;
+    }
+    .chat-row-user { justify-content: flex-end; }
+    .chat-row-assistant,
+    .chat-row-tool { justify-content: flex-start; }
+    .chat-row-system { justify-content: center; }
+    .chat-bubble {
+      max-width: min(88%, 640px);
+      border-radius: 14px;
       border: 1px solid var(--border);
-      border-radius: 8px;
+      overflow: hidden;
     }
-    .message-role {
-      font-size: 0.75rem;
+    .chat-bubble-user {
+      background: linear-gradient(135deg, #2a3548 0%, #1f2a3d 100%);
+      border-color: #3d4f68;
+    }
+    .chat-bubble-assistant {
+      background: var(--card);
+      border-color: var(--border);
+    }
+    .chat-bubble-system {
+      max-width: 92%;
+      background: #151c28;
+      border-style: dashed;
+    }
+    .chat-bubble-tool {
+      background: #141f1a;
+      border-color: #2a4a3a;
+    }
+    .chat-bubble-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.875rem 0;
+      font-size: 0.6875rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
       text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--accent);
-      margin-bottom: 0.25rem;
     }
-    .message-content {
+    .chat-role-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .chat-bubble-user .chat-role-dot { background: var(--accent); }
+    .chat-bubble-assistant .chat-role-dot { background: #5b9fd4; }
+    .chat-bubble-system .chat-role-dot { background: var(--muted); }
+    .chat-bubble-tool .chat-role-dot { background: var(--ok); }
+    .chat-bubble-user .chat-role-label { color: #ffb899; }
+    .chat-bubble-assistant .chat-role-label { color: #8ec5f0; }
+    .chat-bubble-system .chat-role-label { color: var(--muted); }
+    .chat-bubble-tool .chat-role-label { color: #7ee0a8; }
+    .chat-bubble-body {
+      padding: 0.375rem 0.875rem 0.75rem;
+      font-size: 0.9375rem;
+      line-height: 1.55;
       white-space: pre-wrap;
       word-break: break-word;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .chat-bubble-body:last-child { padding-bottom: 0.875rem; }
+    .chat-part {
+      margin-bottom: 0.5rem;
+    }
+    .chat-part:last-child { margin-bottom: 0; }
+    .chat-part-label {
+      font-size: 0.6875rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.25rem;
+    }
+    .chat-image-link {
+      display: inline-block;
+      margin-top: 0.25rem;
       font-size: 0.8125rem;
     }
-    .message-meta {
+    .chat-image-preview {
+      display: block;
+      max-width: 100%;
+      max-height: 220px;
+      margin-top: 0.375rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+    .chat-json {
+      margin: 0;
+      padding: 0.625rem 0.75rem;
+      background: #0a0e14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.75rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-x: auto;
+    }
+    .chat-reasoning {
+      margin: 0 0.875rem 0.75rem;
+      border: 1px solid #3a3350;
+      border-radius: 10px;
+      background: #12101c;
+    }
+    .chat-reasoning summary {
+      cursor: pointer;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.75rem;
+      color: #b8a8e8;
+      user-select: none;
+    }
+    .chat-reasoning-body {
+      padding: 0 0.75rem 0.75rem;
+      font-size: 0.8125rem;
+      color: #c9bddf;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.5;
+      font-style: italic;
+    }
+    .chat-tool-calls {
+      margin: 0 0.875rem 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .chat-tool-call {
+      border: 1px solid #3a4a58;
+      border-radius: 10px;
+      background: #101820;
+      overflow: hidden;
+    }
+    .chat-tool-call-head {
+      padding: 0.4375rem 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #9ec8ff;
+      border-bottom: 1px solid #2a3648;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .chat-tool-call-args {
+      margin: 0;
+      padding: 0.625rem 0.75rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.75rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #c5d4e8;
+    }
+    .chat-meta-line {
+      padding: 0 0.875rem 0.75rem;
       font-size: 0.75rem;
       color: var(--muted);
-      margin-top: 0.25rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .chat-empty {
+      margin: auto;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.875rem;
+      padding: 2rem 1rem;
     }
     .metrics-pre {
       margin: 0;
@@ -310,27 +467,6 @@
         : `<tr><td colspan="4" class="sub">No sessions yet</td></tr>`;
     }
 
-    function renderMessage(msg) {
-      const role = msg.role || "unknown";
-      let content = "";
-      if (typeof msg.content === "string") {
-        content = msg.content;
-      } else if (msg.content && typeof msg.content === "object") {
-        content = JSON.stringify(msg.content, null, 2);
-      }
-      const reasoning = msg.reasoning_content ? `<div class="message-meta">reasoning: ${escapeHtml(msg.reasoning_content)}</div>` : "";
-      const toolCalls = msg.tool_calls && msg.tool_calls.length
-        ? `<div class="message-meta">tool_calls:<pre>${escapeHtml(JSON.stringify(msg.tool_calls, null, 2))}</pre></div>`
-        : "";
-      const toolCallId = msg.tool_call_id ? `<div class="message-meta">tool_call_id: ${escapeHtml(msg.tool_call_id)}</div>` : "";
-      const name = msg.name ? `<div class="message-meta">name: ${escapeHtml(msg.name)}</div>` : "";
-      return `<div class="message">
-        <div class="message-role">${escapeHtml(role)}</div>
-        <div class="message-content">${content ? escapeHtml(content) : "<em class=\"sub\">(empty)</em>"}</div>
-        ${reasoning}${toolCalls}${toolCallId}${name}
-      </div>`;
-    }
-
     function escapeHtml(raw) {
       return String(raw)
         .replace(/&/g, "&amp;")
@@ -340,23 +476,166 @@
         .replace(/'/g, "&#039;");
     }
 
+    const ROLE_LABELS = {
+      user: "User",
+      assistant: "Assistant",
+      system: "System",
+      tool: "Tool",
+    };
+
+    function roleLabel(role) {
+      return ROLE_LABELS[role] || role || "Unknown";
+    }
+
+    function chatRowClass(role) {
+      if (role === "user") return "chat-row-user";
+      if (role === "system") return "chat-row-system";
+      if (role === "tool") return "chat-row-tool";
+      return "chat-row-assistant";
+    }
+
+    function chatBubbleClass(role) {
+      if (role === "user") return "chat-bubble-user";
+      if (role === "system") return "chat-bubble-system";
+      if (role === "tool") return "chat-bubble-tool";
+      return "chat-bubble-assistant";
+    }
+
+    function renderJsonBlock(value) {
+      return `<pre class="chat-json">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+    }
+
+    function renderContentPart(part) {
+      if (!part || typeof part !== "object") {
+        return `<div class="chat-part">${escapeHtml(String(part ?? ""))}</div>`;
+      }
+      const kind = part.type || "unknown";
+      if (kind === "text") {
+        const text = part.text || "";
+        return text
+          ? `<div class="chat-part">${escapeHtml(text)}</div>`
+          : `<div class="chat-part sub"><em>(empty text part)</em></div>`;
+      }
+      if (kind === "image_url") {
+        const url = part.image_url?.url || part.url || "";
+        if (!url) {
+          return `<div class="chat-part"><div class="chat-part-label">Image</div>${renderJsonBlock(part)}</div>`;
+        }
+        const safeUrl = escapeHtml(url);
+        const preview = url.startsWith("data:") || url.startsWith("http")
+          ? `<img class="chat-image-preview" src="${safeUrl}" alt="image part">`
+          : "";
+        return `<div class="chat-part">
+          <div class="chat-part-label">Image</div>
+          <a class="chat-image-link" href="${safeUrl}" target="_blank" rel="noopener">${safeUrl}</a>
+          ${preview}
+        </div>`;
+      }
+      return `<div class="chat-part"><div class="chat-part-label">${escapeHtml(kind)}</div>${renderJsonBlock(part)}</div>`;
+    }
+
+    function renderContent(content) {
+      if (content == null) {
+        return `<div class="chat-bubble-body"><em class="sub">(empty)</em></div>`;
+      }
+      if (typeof content === "string") {
+        return content
+          ? `<div class="chat-bubble-body">${escapeHtml(content)}</div>`
+          : `<div class="chat-bubble-body"><em class="sub">(empty)</em></div>`;
+      }
+      if (Array.isArray(content)) {
+        const parts = content.map(renderContentPart).join("");
+        return `<div class="chat-bubble-body">${parts || "<em class=\"sub\">(empty)</em>"}</div>`;
+      }
+      if (typeof content === "object") {
+        return `<div class="chat-bubble-body">${renderJsonBlock(content)}</div>`;
+      }
+      return `<div class="chat-bubble-body">${escapeHtml(String(content))}</div>`;
+    }
+
+    function renderToolCalls(toolCalls) {
+      const cards = toolCalls.map((tc) => {
+        const fn = tc.function || {};
+        const name = fn.name || tc.name || "unknown";
+        const id = tc.id ? ` · ${tc.id}` : "";
+        let args = fn.arguments ?? "{}";
+        if (typeof args === "object") {
+          args = JSON.stringify(args, null, 2);
+        } else {
+          try {
+            args = JSON.stringify(JSON.parse(args), null, 2);
+          } catch {
+            // keep raw string
+          }
+        }
+        return `<div class="chat-tool-call">
+          <div class="chat-tool-call-head">function ${escapeHtml(name)}${escapeHtml(id)}</div>
+          <pre class="chat-tool-call-args">${escapeHtml(String(args))}</pre>
+        </div>`;
+      }).join("");
+      return `<div class="chat-tool-calls">${cards}</div>`;
+    }
+
+    function renderReasoning(text) {
+      return `<details class="chat-reasoning">
+        <summary>Reasoning</summary>
+        <div class="chat-reasoning-body">${escapeHtml(text)}</div>
+      </details>`;
+    }
+
+    function renderMessage(msg) {
+      const role = msg.role || "unknown";
+      const label = roleLabel(role);
+      const header = `<div class="chat-bubble-header">
+        <span class="chat-role-dot"></span>
+        <span class="chat-role-label">${escapeHtml(label)}</span>
+      </div>`;
+      const body = renderContent(msg.content);
+      const reasoning = msg.reasoning_content ? renderReasoning(msg.reasoning_content) : "";
+      const toolCalls = msg.tool_calls && msg.tool_calls.length
+        ? renderToolCalls(msg.tool_calls)
+        : "";
+      const meta = [];
+      if (msg.tool_call_id) meta.push(`tool_call_id: ${msg.tool_call_id}`);
+      if (msg.name) meta.push(`name: ${msg.name}`);
+      const metaHtml = meta.length
+        ? `<div class="chat-meta-line">${escapeHtml(meta.join(" · "))}</div>`
+        : "";
+      return `<div class="chat-row ${chatRowClass(role)}">
+        <div class="chat-bubble ${chatBubbleClass(role)}">
+          ${header}
+          ${body}
+          ${reasoning}
+          ${toolCalls}
+          ${metaHtml}
+        </div>
+      </div>`;
+    }
+
     async function showSession(responseId) {
       const modal = document.getElementById("session-modal");
       const body = document.getElementById("session-modal-body");
       document.getElementById("session-modal-id").textContent = responseId;
-      body.innerHTML = "Loading…";
+      body.innerHTML = `<div class="chat-session-meta">Loading…</div><div class="chat-thread"><div class="chat-empty">Loading messages…</div></div>`;
       modal.classList.add("open");
       try {
         const res = await fetch(`/admin/api/sessions/${encodeURIComponent(responseId)}`);
         if (!res.ok) throw new Error(res.statusText);
         const data = await res.json();
-        const header = `<div class="sub" style="margin-bottom:1rem">Provider: <span class="pill">${escapeHtml(data.provider)}</span> · Bytes: ${fmtBytes(data.bytes)} · Last used: ${fmtTime(data.last_used_at_unix_ms)}</div>`;
-        const messages = data.messages && data.messages.length
+        const meta = `<div class="chat-session-meta">
+          Provider <span class="pill">${escapeHtml(data.provider)}</span>
+          · ${fmtBytes(data.bytes)}
+          · Last used ${fmtTime(data.last_used_at_unix_ms)}
+          · ${data.messages?.length || 0} message(s)
+        </div>`;
+        const thread = data.messages && data.messages.length
           ? data.messages.map(renderMessage).join("")
-          : `<p class="sub">No messages in this session.</p>`;
-        body.innerHTML = header + messages;
+          : `<div class="chat-empty">No messages in this session.</div>`;
+        body.innerHTML = meta + `<div class="chat-thread">${thread}</div>`;
+        const threadEl = body.querySelector(".chat-thread");
+        if (threadEl) threadEl.scrollTop = threadEl.scrollHeight;
       } catch (err) {
-        body.innerHTML = `<p class="err-text">Failed to load session: ${escapeHtml(err)}</p>`;
+        body.innerHTML = `<div class="chat-session-meta"><span class="err-text">Failed to load session: ${escapeHtml(err)}</span></div>`;
       }
     }
 
