@@ -32,3 +32,10 @@ toml_edit = "0.22"
 [dev-dependencies]
 mockito = "1"
 http-body-util = "0.1"
+
+[profile.release]
+opt-level = "z"        # 体积优先；如需要性能可改为 3
+lto = true             # 链接时优化，显著减小体积
+panic = "abort"        # 去掉 panic 栈展开信息
+strip = true           # 去掉符号表（Rust 1.59+）
+codegen-units = 1      # 单一代码单元，LTO 效果最佳
