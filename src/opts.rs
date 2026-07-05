@@ -98,7 +98,7 @@ pub struct SetupArgs {
     pub api_key: Option<String>,
     #[arg(long, env = "UPSTREAM_BASE_URL")]
     pub base_url: Option<String>,
-    #[arg(long, env = "UPSTREAM_MODEL")]
+    #[arg(long)]
     pub model: Option<String>,
     #[arg(
         short = 'b',

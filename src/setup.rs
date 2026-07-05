@@ -123,7 +123,6 @@ pub async fn run_setup(opts: SetupOptions) -> Result<SetupResult> {
     merge_codex_config(
         &codex_config_path,
         &codex_provider_name,
-        &model,
         &catalog_path,
         &bridge_base_url,
         opts.provider.codex_env_key(),
@@ -187,7 +186,6 @@ pub async fn run_setup(opts: SetupOptions) -> Result<SetupResult> {
 pub fn merge_codex_config(
     path: &Path,
     provider_name: &str,
-    model: &str,
     catalog_path: &Path,
     bridge_base_url: &str,
     env_key: &str,
@@ -204,8 +202,8 @@ pub fn merge_codex_config(
         .with_context(|| format!("existing {} is not valid TOML", path.display()))?;
 
     if set_active {
+        doc.remove("model");
         doc.insert("model_provider", value(provider_name));
-        doc.insert("model", value(model));
         doc.insert(
             "model_catalog_json",
             value(catalog_path.display().to_string()),
@@ -858,7 +856,6 @@ trust_level = "trusted"
         merge_codex_config(
             &path,
             "crabbridge-kimi",
-            "kimi-for-coding",
             &catalog,
             "http://127.0.0.1:11435/kimi/v1",
             "KIMI_API_KEY",
@@ -868,7 +865,7 @@ trust_level = "trusted"
 
         let merged = fs::read_to_string(&path).unwrap();
         assert!(merged.contains("model_provider = \"crabbridge-kimi\""));
-        assert!(merged.contains("model = \"kimi-for-coding\""));
+        assert!(!merged.contains("model = "));
         assert!(merged.contains("[model_providers.crabbridge-kimi]"));
         assert!(merged.contains("env_key = \"KIMI_API_KEY\""));
         assert!(merged.contains("[projects.\"/tmp/foo\"]"));

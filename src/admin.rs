@@ -2,7 +2,7 @@
 
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
 };
@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::cache::CacheStats;
 use crate::metrics::MetricsSnapshot;
-use crate::session::SessionStats;
+use crate::session::{SessionDetail, SessionStats};
 use crate::state::AppState;
 
 const ADMIN_HTML: &str = include_str!("../static/admin.html");
@@ -44,6 +44,17 @@ pub async fn dashboard_page() -> Html<&'static str> {
 
 pub async fn overview(State(state): State<AppState>) -> Json<OverviewResponse> {
     Json(build_overview(&state))
+}
+
+pub async fn session_detail(
+    State(state): State<AppState>,
+    Path(response_id): Path<String>,
+) -> Result<Json<SessionDetail>, StatusCode> {
+    state
+        .sessions
+        .get_session(&response_id)
+        .ok_or(StatusCode::NOT_FOUND)
+        .map(Json)
 }
 
 pub async fn prometheus_metrics(
@@ -86,10 +97,7 @@ pub async fn prometheus_metrics(
 }
 
 fn prefers_html(headers: &HeaderMap) -> bool {
-    let Some(accept) = headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-    else {
+    let Some(accept) = headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()) else {
         return false;
     };
     let accept = accept.to_ascii_lowercase();

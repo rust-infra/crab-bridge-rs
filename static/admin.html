@@ -103,7 +103,75 @@
     .err-text { color: var(--err); }
     #status.ok { color: var(--ok); }
     #status.err { color: var(--err); }
-    a { color: var(--accent); }
+    a { color: var(--accent); cursor: pointer; }
+    .session-link { text-decoration: none; }
+    .session-link:hover { text-decoration: underline; }
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 1rem;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 100%;
+      max-width: 800px;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .modal-header {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+    .modal-header h3 { margin: 0; font-size: 1rem; }
+    .modal-body {
+      padding: 1rem 1.25rem;
+      overflow: auto;
+    }
+    .modal-close {
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 1.25rem;
+      cursor: pointer;
+    }
+    .message {
+      margin-bottom: 1rem;
+      padding: 0.75rem 1rem;
+      background: #121821;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .message-role {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--accent);
+      margin-bottom: 0.25rem;
+    }
+    .message-content {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.8125rem;
+    }
+    .message-meta {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.25rem;
+    }
     .metrics-pre {
       margin: 0;
       padding: 1rem;
@@ -155,6 +223,18 @@
         <tbody id="sessions-table"></tbody>
       </table>
     </section>
+
+    <div id="session-modal" class="modal-overlay">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Session <code id="session-modal-id"></code></h3>
+          <button class="modal-close" onclick="closeSessionModal()">&times;</button>
+        </div>
+        <div class="modal-body" id="session-modal-body">
+          Loading…
+        </div>
+      </div>
+    </div>
 
     <section>
       <h2>Prometheus export</h2>
@@ -225,10 +305,71 @@
 
       document.getElementById("sessions-table").innerHTML = s.recent_sessions.length
         ? s.recent_sessions.map(row =>
-            `<tr><td><code>${row.response_id}</code></td><td>${row.provider}</td><td>${fmtBytes(row.bytes)}</td><td>${fmtTime(row.last_used_at_unix_ms)}</td></tr>`
+            `<tr><td><a class="session-link" onclick="showSession('${row.response_id}')"><code>${row.response_id}</code></a></td><td>${row.provider}</td><td>${fmtBytes(row.bytes)}</td><td>${fmtTime(row.last_used_at_unix_ms)}</td></tr>`
           ).join("")
         : `<tr><td colspan="4" class="sub">No sessions yet</td></tr>`;
     }
+
+    function renderMessage(msg) {
+      const role = msg.role || "unknown";
+      let content = "";
+      if (typeof msg.content === "string") {
+        content = msg.content;
+      } else if (msg.content && typeof msg.content === "object") {
+        content = JSON.stringify(msg.content, null, 2);
+      }
+      const reasoning = msg.reasoning_content ? `<div class="message-meta">reasoning: ${escapeHtml(msg.reasoning_content)}</div>` : "";
+      const toolCalls = msg.tool_calls && msg.tool_calls.length
+        ? `<div class="message-meta">tool_calls:<pre>${escapeHtml(JSON.stringify(msg.tool_calls, null, 2))}</pre></div>`
+        : "";
+      const toolCallId = msg.tool_call_id ? `<div class="message-meta">tool_call_id: ${escapeHtml(msg.tool_call_id)}</div>` : "";
+      const name = msg.name ? `<div class="message-meta">name: ${escapeHtml(msg.name)}</div>` : "";
+      return `<div class="message">
+        <div class="message-role">${escapeHtml(role)}</div>
+        <div class="message-content">${content ? escapeHtml(content) : "<em class=\"sub\">(empty)</em>"}</div>
+        ${reasoning}${toolCalls}${toolCallId}${name}
+      </div>`;
+    }
+
+    function escapeHtml(raw) {
+      return String(raw)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    async function showSession(responseId) {
+      const modal = document.getElementById("session-modal");
+      const body = document.getElementById("session-modal-body");
+      document.getElementById("session-modal-id").textContent = responseId;
+      body.innerHTML = "Loading…";
+      modal.classList.add("open");
+      try {
+        const res = await fetch(`/admin/api/sessions/${encodeURIComponent(responseId)}`);
+        if (!res.ok) throw new Error(res.statusText);
+        const data = await res.json();
+        const header = `<div class="sub" style="margin-bottom:1rem">Provider: <span class="pill">${escapeHtml(data.provider)}</span> · Bytes: ${fmtBytes(data.bytes)} · Last used: ${fmtTime(data.last_used_at_unix_ms)}</div>`;
+        const messages = data.messages && data.messages.length
+          ? data.messages.map(renderMessage).join("")
+          : `<p class="sub">No messages in this session.</p>`;
+        body.innerHTML = header + messages;
+      } catch (err) {
+        body.innerHTML = `<p class="err-text">Failed to load session: ${escapeHtml(err)}</p>`;
+      }
+    }
+
+    function closeSessionModal() {
+      document.getElementById("session-modal").classList.remove("open");
+    }
+
+    document.getElementById("session-modal").addEventListener("click", (e) => {
+      if (e.target.id === "session-modal") closeSessionModal();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeSessionModal();
+    });
     async function refreshMetrics() {
       const el = document.getElementById("metrics-export");
       try {

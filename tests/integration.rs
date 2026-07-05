@@ -263,6 +263,34 @@ async fn models_endpoint_proxies_upstream() {
 }
 
 #[tokio::test]
+async fn kimi_models_endpoint_proxies_upstream() {
+    let mut mock = mockito::Server::new_async().await;
+    let _mock = mock
+        .mock("GET", "/v1/models")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"data":[{"id":"kimi-k2-for-coding"}]}"#)
+        .create_async()
+        .await;
+
+    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url()), "kimi").await;
+
+    let response: serde_json::Value = Client::new()
+        .get(format!("http://{addr}/kimi/v1/models"))
+        .header("Authorization", format!("Bearer {TEST_BEARER}"))
+        .send()
+        .await
+        .expect("send")
+        .json()
+        .await
+        .expect("json");
+
+    assert_eq!(response["data"][0]["id"], "kimi-k2-for-coding");
+    assert_eq!(response["models"][0]["id"], "kimi-k2-for-coding");
+}
+
+#[tokio::test]
 async fn kimi_upstream_requests_include_user_agent() {
     use crab_bridge_rs::provider::KIMI_UPSTREAM_USER_AGENT;
 
@@ -387,4 +415,66 @@ async fn admin_dashboard_and_metrics_endpoints() {
         .expect("html body");
     assert!(metrics_html.contains("CrabBridge Metrics"));
     assert!(metrics_html.contains("crabbridge_uptime_seconds"));
+}
+
+#[tokio::test]
+async fn admin_session_detail_endpoint_returns_messages() {
+    let mut mock = mockito::Server::new_async().await;
+    let _mock = mock
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"choices":[{"message":{"role":"assistant","content":"hi there"}}]}"#)
+        .create_async()
+        .await;
+
+    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url()), "deepseek").await;
+
+    let client = Client::new();
+    let response = client
+        .post(format!("http://{addr}/deepseek/v1/responses"))
+        .header("Authorization", format!("Bearer {TEST_BEARER}"))
+        .json(&json!({
+            "model": "gpt-5.4",
+            "input": "hello",
+            "stream": false
+        }))
+        .send()
+        .await
+        .expect("send");
+
+    assert!(response.status().is_success());
+    let body: serde_json::Value = response.json().await.expect("json");
+    let response_id = body["id"].as_str().expect("response id");
+
+    let session: serde_json::Value = client
+        .get(format!("http://{addr}/admin/api/sessions/{response_id}"))
+        .send()
+        .await
+        .expect("session detail")
+        .json()
+        .await
+        .expect("json");
+
+    assert_eq!(session["response_id"], response_id);
+    assert_eq!(session["provider"], "deepseek");
+    assert!(session["messages"].is_array());
+    assert_eq!(session["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(session["messages"][0]["role"], "user");
+    assert_eq!(session["messages"][1]["role"], "assistant");
+}
+
+#[tokio::test]
+async fn admin_session_detail_endpoint_returns_404_for_unknown() {
+    let mock = mockito::Server::new_async().await;
+    let (addr, _handle) = spawn_test_server(&mock.url(), "deepseek").await;
+
+    let response = Client::new()
+        .get(format!("http://{addr}/admin/api/sessions/resp_missing"))
+        .send()
+        .await
+        .expect("send");
+
+    assert_eq!(response.status(), 404);
 }

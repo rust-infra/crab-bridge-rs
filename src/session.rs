@@ -37,6 +37,15 @@ pub struct SessionStats {
     pub recent_sessions: Vec<SessionSummary>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionDetail {
+    pub response_id: String,
+    pub provider: String,
+    pub bytes: usize,
+    pub last_used_at_unix_ms: u128,
+    pub messages: Vec<ChatMessage>,
+}
+
 /// Maps response_id → accumulated message history for that session.
 /// Codex uses `previous_response_id` to continue a conversation; we maintain
 /// the full messages[] here so each Chat Completions call is self-contained.
@@ -291,6 +300,29 @@ impl SessionStore {
     pub fn stats(&self) -> SessionStats {
         let state = self.state.lock().expect("session store mutex poisoned");
         state.snapshot_stats()
+    }
+
+    /// Retrieve full session detail for the admin dashboard, or `None` if unknown.
+    pub fn get_session(&self, response_id: &str) -> Option<SessionDetail> {
+        let mut state = self.state.lock().expect("session store mutex poisoned");
+        let (provider, bytes, last_used_at_unix_ms) = {
+            let entry = state.sessions.get(response_id)?;
+            (
+                entry.provider.clone(),
+                entry.bytes,
+                system_time_millis(entry.last_used_at),
+            )
+        };
+        let messages = state.load_session_messages(response_id);
+        state.touch_session(response_id);
+        state.enforce_limits();
+        Some(SessionDetail {
+            response_id: response_id.to_string(),
+            provider,
+            bytes,
+            last_used_at_unix_ms,
+            messages,
+        })
     }
 }
 
@@ -1036,5 +1068,26 @@ mod tests {
 
         assert!(store.get_history(&id1).is_empty());
         assert_eq!(store.get_history(&id2).len(), 1);
+    }
+
+    #[test]
+    fn test_get_session_returns_detail_and_messages() {
+        let store = SessionStore::new();
+        let id = store.save(
+            TEST_PROVIDER,
+            vec![msg("user", Some("hi")), msg("assistant", Some("hey"))],
+        );
+        let detail = store.get_session(&id).expect("session exists");
+        assert_eq!(detail.response_id, id);
+        assert_eq!(detail.provider, TEST_PROVIDER);
+        assert_eq!(detail.messages.len(), 2);
+        assert_eq!(detail.messages[0].text_content(), "hi");
+        assert_eq!(detail.messages[1].text_content(), "hey");
+    }
+
+    #[test]
+    fn test_get_session_missing_returns_none() {
+        let store = SessionStore::new();
+        assert!(store.get_session("resp_nonexistent").is_none());
     }
 }
