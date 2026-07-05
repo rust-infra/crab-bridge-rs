@@ -15,6 +15,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/crabridge /usr/local/bin/crabridge
+COPY crabbridge.docker.toml /etc/crabbridge/crabbridge.toml
 
 WORKDIR /app
 

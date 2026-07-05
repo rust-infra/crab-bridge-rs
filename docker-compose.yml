@@ -5,9 +5,10 @@ services:
     container_name: crabbridge
     restart: unless-stopped
     ports:
-      - "${CRABRIDGE_PORT:-11435}:11435"
+      - "11435:11435"
     volumes:
-      - ./docker/crabbridge.toml:/etc/crabbridge/crabbridge.toml:ro
+      # Optional: mount a custom config over the image default
+      # - ./crabbridge.docker.toml:/etc/crabbridge/crabbridge.toml:ro
       - crabbridge-data:/app/data
     environment:
       CRABRIDGE_CONFIG: /etc/crabbridge/crabbridge.toml
