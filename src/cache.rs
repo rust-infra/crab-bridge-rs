@@ -23,9 +23,12 @@ impl ResponseCache {
         }
     }
 
-    pub fn cache_key(body: &Value) -> String {
+    pub fn cache_key(provider: &str, url: &str, api_key: &str, body: &Value) -> String {
         let serialized = serde_json::to_string(body).unwrap_or_default();
         let mut hasher = DefaultHasher::new();
+        provider.hash(&mut hasher);
+        url.hash(&mut hasher);
+        api_key.hash(&mut hasher);
         serialized.hash(&mut hasher);
         format!("{:016x}", hasher.finish())
     }

@@ -1,10 +1,11 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Instant;
 
 use axum::{
     Json,
-    extract::{Request, State},
-    http::StatusCode,
+    extract::{Path, Request, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use reqwest::Url;
@@ -12,12 +13,32 @@ use serde_json::json;
 use tracing::{debug, error, info, warn};
 
 use crate::cache::ResponseCache;
-use crate::state::AppState;
+use crate::provider::{ProviderKind, apply_upstream_headers};
+use crate::state::{AppState, ProviderRuntime};
 use crate::stream::{self, StreamArgs};
 use crate::translate;
+use crate::translate::TranslationOptions;
 use crate::types::*;
 
 const DEBUG_NAME_LIMIT: usize = 80;
+
+/// Read `Authorization: Bearer …` from an incoming Codex request.
+fn bearer_token_from_headers(headers: &HeaderMap) -> Option<String> {
+    let auth = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
+    let token = auth
+        .strip_prefix("Bearer ")
+        .or_else(|| auth.strip_prefix("bearer "))?
+        .trim();
+    (!token.is_empty()).then(|| token.to_string())
+}
+
+/// Bearer token from Codex (`env_key` → `Authorization: Bearer …`).
+fn upstream_api_key(headers: &HeaderMap) -> Option<Arc<String>> {
+    bearer_token_from_headers(headers).map(Arc::new)
+}
 
 pub fn join_base(url: &Url) -> String {
     let s = url.as_str();
@@ -32,18 +53,54 @@ pub async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
 }
 
-/// Codex probes `HEAD/GET {base_url}` for reachability (e.g. `http://127.0.0.1:11435/v1`).
-pub async fn api_root() -> impl IntoResponse {
-    StatusCode::OK
+/// Codex probes `HEAD/GET {base_url}` for reachability (e.g. `http://127.0.0.1:11435/kimi/v1`).
+pub async fn api_root(
+    State(state): State<AppState>,
+    provider: Option<Path<String>>,
+) -> impl IntoResponse {
+    let slug = provider
+        .as_ref()
+        .map(|p| p.0.as_str())
+        .unwrap_or(state.default_provider.as_str());
+    api_root_for_provider(&state, slug).await
 }
 
-pub async fn handle_models(State(state): State<AppState>) -> Response {
-    info!("GET /v1/models");
-    let url = format!("{}models", join_base(&state.upstream));
-    let mut builder = state.client.get(&url);
-    if !state.api_key.is_empty() {
-        builder = builder.bearer_auth(state.api_key.as_str());
+async fn api_root_for_provider(state: &AppState, provider: &str) -> Response {
+    if state.provider(provider).is_some() {
+        StatusCode::OK.into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            format!("unknown provider: {provider}"),
+        )
+            .into_response()
     }
+}
+
+pub async fn handle_models(
+    State(state): State<AppState>,
+    provider: Option<Path<String>>,
+    headers: HeaderMap,
+) -> Response {
+    let slug = provider
+        .map(|p| p.0)
+        .unwrap_or_else(|| state.default_provider.as_str().to_string());
+    handle_models_inner(state, &slug, &headers).await
+}
+
+async fn handle_models_inner(state: AppState, provider: &str, headers: &HeaderMap) -> Response {
+    let Some(runtime) = state.provider(provider) else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("unknown provider: {provider}"),
+        )
+            .into_response();
+    };
+    info!(provider, "GET /{provider}/v1/models");
+    let kind = ProviderKind::from_route(provider).unwrap_or(ProviderKind::Custom);
+    let api_key = upstream_api_key(headers).unwrap_or_default();
+    let url = format!("{}models", join_base(&runtime.upstream));
+    let builder = apply_upstream_headers(state.client.get(&url), kind, api_key.as_str());
 
     let upstream_body: Option<serde_json::Value> = match builder.send().await {
         Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
@@ -63,12 +120,42 @@ pub async fn handle_models(State(state): State<AppState>) -> Response {
         }
     };
 
-    let list = upstream_body
+    let mut list = upstream_body
         .as_ref()
         .and_then(|b| b.get("data").or_else(|| b.get("models")))
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+
+    let mut seen: HashSet<String> = list
+        .iter()
+        .filter_map(|item| item.get("id").and_then(|v| v.as_str()).map(String::from))
+        .collect();
+
+    list.retain(|item| {
+        item.get("id")
+            .and_then(|v| v.as_str())
+            .is_some_and(|id| kind.model_matches_provider(id))
+    });
+    seen.retain(|id| kind.model_matches_provider(id));
+
+    for known in kind.known_models_for_upstream(runtime.upstream.as_str()) {
+        if seen.insert((*known).to_string()) {
+            list.push(json!({
+                "id": known,
+                "object": "model",
+                "owned_by": "crabbridge",
+            }));
+        }
+    }
+    let default_model = kind.default_model();
+    if seen.insert(default_model.to_string()) {
+        list.push(json!({
+            "id": default_model,
+            "object": "model",
+            "owned_by": "crabbridge",
+        }));
+    }
 
     Json(json!({
         "object": "list",
@@ -83,9 +170,38 @@ pub async fn handle_fallback(req: Request) -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
-pub async fn handle_responses(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+pub async fn handle_responses(
+    State(state): State<AppState>,
+    provider: Option<Path<String>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let slug = provider
+        .map(|p| p.0)
+        .unwrap_or_else(|| state.default_provider.as_str().to_string());
+    handle_responses_for_provider(state, &slug, &headers, body).await
+}
+
+async fn handle_responses_for_provider(
+    state: AppState,
+    provider: &str,
+    headers: &HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(runtime) = state.provider(provider) else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("unknown provider: {provider}"),
+        )
+            .into_response();
+    };
+
     let started = Instant::now();
-    info!(bytes = body.len(), "POST /v1/responses");
+    info!(
+        provider,
+        bytes = body.len(),
+        "POST /{provider}/v1/responses"
+    );
     let req: ResponsesRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => {
@@ -105,6 +221,7 @@ pub async fn handle_responses(State(state): State<AppState>, body: axum::body::B
         _ => 1,
     };
     info!(
+        provider,
         model = %req.model,
         stream = req.stream,
         input_items,
@@ -118,11 +235,14 @@ pub async fn handle_responses(State(state): State<AppState>, body: axum::body::B
         summarize_debug_names(response_tool_debug_names(&req.tools))
     );
 
-    handle_responses_inner(state, req, started).await
+    handle_responses_inner(state, provider, runtime, headers, req, started).await
 }
 
 async fn handle_responses_inner(
     state: AppState,
+    provider: &str,
+    runtime: ProviderRuntime,
+    headers: &HeaderMap,
     req: ResponsesRequest,
     started: Instant,
 ) -> Response {
@@ -139,15 +259,21 @@ async fn handle_responses_inner(
 
     let model = req.model.clone();
     let namespace_tools = translate::namespace_tool_map(&req.tools);
+    let kind = ProviderKind::from_route(provider).unwrap_or(ProviderKind::Custom);
     let mut chat_req = translate::to_chat_request(
         &req,
         history,
         &state.sessions,
-        state.default_model.as_str(),
-        state.default_max_tokens,
-        state.default_temperature,
+        TranslationOptions {
+            provider: kind,
+            default_model: kind.default_model(),
+            model_map: runtime.model_map.as_deref(),
+            default_max_tokens: runtime.default_max_tokens,
+            default_temperature: runtime.default_temperature,
+        },
     );
     info!(
+        provider,
         client_model = %model,
         upstream_model = %chat_req.model,
         history_messages,
@@ -160,29 +286,59 @@ async fn handle_responses_inner(
         "→ upstream tools={}",
         summarize_debug_names(chat_tool_debug_names(&chat_req.tools))
     );
-    let url = format!("{}chat/completions", join_base(&state.upstream));
+    let url = format!("{}chat/completions", join_base(&runtime.upstream));
+    let Some(api_key) = upstream_api_key(headers) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "missing Authorization: Bearer token (set Codex env_key in shell)",
+        )
+            .into_response();
+    };
 
     if req.stream {
         let response_id = state.sessions.new_id();
         chat_req.stream = true;
         let request_messages = chat_req.messages.clone();
-        stream::translate_stream(StreamArgs {
+        let args = StreamArgs {
             client: state.client,
             url,
-            api_key: state.api_key,
+            api_key,
             chat_req,
             upstream_request: state.upstream_request,
             response_id,
+            provider: provider.to_string(),
             sessions: state.sessions,
             request_messages,
             namespace_tools,
             model,
             started,
-        })
-        .into_response()
+        };
+        match stream::prepare_upstream(&args).await {
+            Ok(upstream) => stream::translate_stream(args, upstream).into_response(),
+            Err(stream::UpstreamError::BodyError(msg)) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            }
+            Err(stream::UpstreamError::ConnectionError(msg)) => {
+                (StatusCode::BAD_GATEWAY, msg).into_response()
+            }
+            Err(stream::UpstreamError::UpstreamError { status, body }) => {
+                let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+                (status, body).into_response()
+            }
+        }
     } else {
         chat_req.stream = false;
-        handle_blocking(state, chat_req, url, model, namespace_tools, started).await
+        handle_blocking(BlockingArgs {
+            state,
+            provider: provider.to_string(),
+            api_key,
+            chat_req,
+            url,
+            model,
+            namespace_tools,
+            started,
+        })
+        .await
     }
 }
 
@@ -362,23 +518,38 @@ fn parse_spawn_agent_call(call: &serde_json::Value) -> Option<SpawnAgentCall> {
     })
 }
 
-async fn handle_blocking(
+struct BlockingArgs {
     state: AppState,
+    provider: String,
+    api_key: Arc<String>,
     chat_req: ChatRequest,
     url: String,
     model: String,
     namespace_tools: translate::NamespaceToolMap,
     started: Instant,
-) -> Response {
+}
+
+async fn handle_blocking(args: BlockingArgs) -> Response {
+    let BlockingArgs {
+        state,
+        provider,
+        api_key,
+        chat_req,
+        url,
+        model,
+        namespace_tools,
+        started,
+    } = args;
     let messages = chat_req.messages.len();
     let tools = chat_req.tools.len();
 
     if let Some(cache) = &state.cache
         && let Ok(body) = state.upstream_request.request_body(&chat_req)
     {
-        let key = ResponseCache::cache_key(&body);
+        let key = ResponseCache::cache_key(&provider, &url, &api_key, &body);
         if let Some(cached) = cache.get(&key).await {
             info!(
+                provider,
                 cache_key = %key,
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 "returning cached responses payload"
@@ -392,14 +563,15 @@ async fn handle_blocking(
         }
     }
 
-    let mut builder = state
-        .client
-        .post(&url)
-        .header("Content-Type", "application/json");
-
-    if !state.api_key.is_empty() {
-        builder = builder.bearer_auth(state.api_key.as_str());
-    }
+    let kind = ProviderKind::from_route(&provider).unwrap_or(ProviderKind::Custom);
+    let builder = apply_upstream_headers(
+        state
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json"),
+        kind,
+        api_key.as_str(),
+    );
 
     let upstream_body = match state.upstream_request.request_body(&chat_req) {
         Ok(body) => body,
@@ -411,7 +583,9 @@ async fn handle_blocking(
             return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
     };
-    let request_bytes = serde_json::to_vec(&upstream_body).map(|b| b.len()).unwrap_or(0);
+    let request_bytes = serde_json::to_vec(&upstream_body)
+        .map(|b| b.len())
+        .unwrap_or(0);
 
     info!(
         model = %chat_req.model,
@@ -487,7 +661,7 @@ async fn handle_blocking(
 
                 let mut full_history = chat_req.messages.clone();
                 full_history.push(assistant_msg);
-                let response_id = state.sessions.save(full_history);
+                let response_id = state.sessions.save(&provider, full_history);
 
                 let (resp, _) = if namespace_tools.is_empty() {
                     translate::from_chat_response(response_id.clone(), &model, chat_resp)
@@ -503,13 +677,14 @@ async fn handle_blocking(
                 if let Some(cache) = &state.cache
                     && let Ok(body) = state.upstream_request.request_body(&chat_req)
                 {
-                    let key = ResponseCache::cache_key(&body);
+                    let key = ResponseCache::cache_key(&provider, &url, &api_key, &body);
                     if let Ok(bytes) = serde_json::to_vec(&resp) {
                         cache.insert(key, bytes::Bytes::from(bytes)).await;
                     }
                 }
 
                 info!(
+                    provider,
                     response_id = %response_id,
                     model = %model,
                     elapsed_ms = started.elapsed().as_millis() as u64,
@@ -527,5 +702,38 @@ async fn handle_blocking(
                 Json(resp).into_response()
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn bearer_token_from_authorization_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer sk-kimi-from-codex"),
+        );
+        assert_eq!(
+            bearer_token_from_headers(&headers).as_deref(),
+            Some("sk-kimi-from-codex")
+        );
+    }
+
+    #[test]
+    fn upstream_api_key_reads_authorization_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer sk-kimi-from-codex"),
+        );
+        assert_eq!(
+            upstream_api_key(&headers).as_deref().map(|k| k.as_str()),
+            Some("sk-kimi-from-codex")
+        );
+        assert!(upstream_api_key(&HeaderMap::new()).is_none());
     }
 }

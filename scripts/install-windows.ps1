@@ -25,7 +25,7 @@ Options:
   -Help              Show this help
 
 Environment:
-  DEEPSEEK_API_KEY   If set, written into the generated .env file
+  DEEPSEEK_API_KEY   If set, written into the generated config.toml
 
 Examples:
   powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
@@ -76,39 +76,46 @@ function Install-Config([string]$RepoRoot, [string]$TargetConfigDir) {
     New-Item -ItemType Directory -Force -Path $TargetConfigDir | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $TargetConfigDir "data") | Out-Null
 
-    $envFile = Join-Path $TargetConfigDir ".env"
-    if (Test-Path $envFile) {
-        Write-Warning "Config already exists: $envFile (unchanged)"
+    $configFile = Join-Path $TargetConfigDir "config.toml"
+    if (Test-Path $configFile) {
+        Write-Warning "Config already exists: $configFile (unchanged)"
         return
     }
 
-    $example = Join-Path $RepoRoot ".env.example"
+    $example = Join-Path $RepoRoot "crabbridge.example.toml"
     if (Test-Path $example) {
-        Copy-Item $example $envFile
+        Copy-Item $example $configFile
     } else {
         @"
-DEEPSEEK_API_KEY=sk-your-api-key-here
-DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
-DEEPSEEK_MODEL=deepseek-chat
-BRIDGE_ADDR=127.0.0.1:11435
-LOG_LEVEL=info
-SESSION_DB=data/crabbridge.db
-SESSION_MEMORY_ONLY=false
-"@ | Set-Content -Path $envFile -Encoding UTF8
+default_provider = "deepseek"
+
+[providers.deepseek]
+api_key = "sk-your-api-key-here"
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-v4-pro"
+
+[providers.kimi]
+api_key = "sk-your-kimi-code-key"
+base_url = "https://api.kimi.com/coding/v1"
+model = "kimi-for-coding"
+
+[server]
+bind_addr = "127.0.0.1:11435"
+log_level = "info"
+
+[session]
+db = "data/crabbridge.db"
+memory_only = false
+"@ | Set-Content -Path $configFile -Encoding UTF8
     }
 
-    $content = Get-Content $envFile -Raw
+    $content = Get-Content $configFile -Raw
     if ($env:DEEPSEEK_API_KEY) {
-        if ($content -match "(?m)^DEEPSEEK_API_KEY=") {
-            $content = $content -replace "(?m)^DEEPSEEK_API_KEY=.*", "DEEPSEEK_API_KEY=$($env:DEEPSEEK_API_KEY)"
-        } else {
-            $content += "`nDEEPSEEK_API_KEY=$($env:DEEPSEEK_API_KEY)`n"
-        }
+        $content = $content -replace '(?m)^api_key = .*', "api_key = `"$($env:DEEPSEEK_API_KEY)`""
     }
-    $content = $content -replace "(?m)^SESSION_DB=.*", "SESSION_DB=data/crabbridge.db"
-    Set-Content -Path $envFile -Value $content.TrimEnd() -Encoding UTF8
+    Set-Content -Path $configFile -Value $content.TrimEnd() -Encoding UTF8
 
-    Write-Step "Created config: $envFile"
+    Write-Step "Created config: $configFile"
 }
 
 function Ensure-UserPath([string]$BinDir) {
@@ -129,15 +136,14 @@ function Show-NextSteps([string]$BinDir, [string]$TargetConfigDir, [string]$ExeP
 CrabBridge installed successfully.
 
   Binary:  $ExePath
-  Config:  $(Join-Path $TargetConfigDir ".env")
+  Config:  $(Join-Path $TargetConfigDir "config.toml")
 
 Next steps:
-  1. Edit $(Join-Path $TargetConfigDir ".env") and set DEEPSEEK_API_KEY
+  1. Edit $(Join-Path $TargetConfigDir "config.toml") and set upstream.api_key
   2. Start the bridge:
-       cd $TargetConfigDir
        $ExePath serve
-  3. Generate Codex config:
-       $ExePath print-codex-config --api-key `$env:DEEPSEEK_API_KEY
+  3. Configure Codex:
+       $ExePath setup
   4. Test:
        $ExePath prompt "Hello"
 "@

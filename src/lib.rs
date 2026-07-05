@@ -1,11 +1,14 @@
+pub mod app;
 pub mod cache;
 pub mod codex_config;
-pub mod error;
+pub mod config;
 pub mod handlers;
 pub mod opts;
 pub mod prompt;
+pub mod provider;
 pub mod session;
 pub(crate) mod session_sqlite;
+pub mod setup;
 pub mod state;
 pub mod stream;
 pub mod translate;

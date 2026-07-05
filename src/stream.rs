@@ -12,6 +12,7 @@ use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    provider::{ProviderKind, apply_upstream_headers},
     session::SessionStore,
     translate::{NamespaceToolMap, response_function_name_for_responses},
     types::{ChatMessage, ChatRequest, ChatStreamChunk, ChatUsage},
@@ -25,6 +26,7 @@ pub struct StreamArgs {
     pub chat_req: ChatRequest,
     pub upstream_request: Arc<UpstreamRequestConfig>,
     pub response_id: String,
+    pub provider: String,
     pub sessions: SessionStore,
     /// The fully translated request messages (including replayed history).
     /// Used to save correct session history so turn-level reasoning can be
@@ -53,6 +55,110 @@ fn summarize_stream_tool_call_names(tool_calls: &BTreeMap<usize, ToolCallAccum>)
         .join(", ")
 }
 
+/// Some OpenAI-compatible providers close SSE without `[DONE]`; finalize when content arrived.
+fn should_finalize_stream_without_done(
+    stream_done: bool,
+    stream_err: bool,
+    has_text: bool,
+    has_tool_calls: bool,
+    has_reasoning: bool,
+) -> bool {
+    !stream_done && !stream_err && (has_text || has_tool_calls || has_reasoning)
+}
+
+/// Error returned when the upstream request cannot be established before
+/// streaming begins.
+#[derive(Debug)]
+pub enum UpstreamError {
+    BodyError(String),
+    ConnectionError(String),
+    UpstreamError { status: u16, body: String },
+}
+
+impl std::fmt::Display for UpstreamError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UpstreamError::BodyError(msg) => write!(f, "upstream request body error: {msg}"),
+            UpstreamError::ConnectionError(msg) => write!(f, "upstream request failed: {msg}"),
+            UpstreamError::UpstreamError { status, body } => {
+                write!(f, "upstream stream error {status}: {body}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for UpstreamError {}
+
+/// Make the upstream request and return the successful response so the caller
+/// can decide whether to return an HTTP error or start the SSE stream.
+pub async fn prepare_upstream(args: &StreamArgs) -> Result<reqwest::Response, UpstreamError> {
+    let kind = ProviderKind::from_route(&args.provider).unwrap_or(ProviderKind::Custom);
+    let builder = apply_upstream_headers(
+        args.client
+            .post(&args.url)
+            .header("Content-Type", "application/json"),
+        kind,
+        args.api_key.as_str(),
+    );
+
+    let upstream_body = match args.upstream_request.request_body(&args.chat_req) {
+        Ok(body) => body,
+        Err(e) => {
+            error!(
+                response_id = %args.response_id,
+                elapsed_ms = args.started.elapsed().as_millis() as u64,
+                "upstream request body error: {e}"
+            );
+            return Err(UpstreamError::BodyError(e.to_string()));
+        }
+    };
+    let request_bytes = serde_json::to_vec(&upstream_body)
+        .map(|b| b.len())
+        .unwrap_or(0);
+
+    info!(
+        response_id = %args.response_id,
+        model = %args.chat_req.model,
+        messages = args.chat_req.messages.len(),
+        tools = args.chat_req.tools.len(),
+        request_bytes,
+        "upstream stream request"
+    );
+
+    match builder.json(&upstream_body).send().await {
+        Ok(r) if r.status().is_success() => {
+            info!(
+                response_id = %args.response_id,
+                ttfb_ms = args.started.elapsed().as_millis() as u64,
+                "upstream stream connected"
+            );
+            Ok(r)
+        }
+        Ok(r) => {
+            let status = r.status();
+            let body = r.text().await.unwrap_or_default();
+            error!(
+                response_id = %args.response_id,
+                status = %status,
+                elapsed_ms = args.started.elapsed().as_millis() as u64,
+                "upstream stream error: {body}"
+            );
+            Err(UpstreamError::UpstreamError {
+                status: status.as_u16(),
+                body,
+            })
+        }
+        Err(e) => {
+            error!(
+                response_id = %args.response_id,
+                elapsed_ms = args.started.elapsed().as_millis() as u64,
+                "upstream request failed: {e}"
+            );
+            Err(UpstreamError::ConnectionError(e.to_string()))
+        }
+    }
+}
+
 /// Translate an upstream Chat Completions SSE stream into a Responses API SSE stream.
 ///
 /// Text response event sequence:
@@ -64,14 +170,16 @@ fn summarize_stream_tool_call_names(tool_calls: &BTreeMap<usize, ToolCallAccum>)
 ///   → response.function_call_arguments.delta → response.output_item.done → response.completed
 pub fn translate_stream(
     args: StreamArgs,
+    upstream: reqwest::Response,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>>> {
     let StreamArgs {
-        client,
-        url,
-        api_key,
-        chat_req,
-        upstream_request,
+        client: _client,
+        url: _url,
+        api_key: _api_key,
+        chat_req: _chat_req,
+        upstream_request: _upstream_request,
         response_id,
+        provider,
         sessions,
         request_messages,
         namespace_tools,
@@ -80,8 +188,6 @@ pub fn translate_stream(
     } = args;
     let msg_item_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
     let reasoning_item_id = format!("rs_{}", uuid::Uuid::new_v4().simple());
-    let messages = chat_req.messages.len();
-    let tools = chat_req.tools.len();
 
     let event_stream = stream! {
         yield Ok(Event::default()
@@ -90,71 +196,6 @@ pub fn translate_stream(
                 "type": "response.created",
                 "response": { "id": &response_id, "status": "in_progress", "model": &model }
             }).to_string()));
-
-        let mut builder = client.post(&url).header("Content-Type", "application/json");
-        if !api_key.is_empty() {
-            builder = builder.bearer_auth(api_key.as_str());
-        }
-
-        let upstream_body = match upstream_request.request_body(&chat_req) {
-            Ok(body) => body,
-            Err(e) => {
-                error!(
-                    response_id = %response_id,
-                    elapsed_ms = started.elapsed().as_millis() as u64,
-                    "upstream request body error: {e}"
-                );
-                yield Ok(Event::default().event("response.failed").data(
-                    json!({"type": "response.failed", "response": {"id": &response_id, "status": "failed", "error": {"code": "request_body_error", "message": e.to_string()}}}).to_string()
-                ));
-                return;
-            }
-        };
-        let request_bytes = serde_json::to_vec(&upstream_body).map(|b| b.len()).unwrap_or(0);
-
-        info!(
-            response_id = %response_id,
-            model = %chat_req.model,
-            messages,
-            tools,
-            request_bytes,
-            "upstream stream request"
-        );
-        let upstream = match builder.json(&upstream_body).send().await {
-            Ok(r) if r.status().is_success() => {
-                info!(
-                    response_id = %response_id,
-                    ttfb_ms = started.elapsed().as_millis() as u64,
-                    "upstream stream connected"
-                );
-                r
-            }
-            Ok(r) => {
-                let status = r.status();
-                let body = r.text().await.unwrap_or_default();
-                error!(
-                    response_id = %response_id,
-                    status = %status,
-                    elapsed_ms = started.elapsed().as_millis() as u64,
-                    "upstream stream error: {body}"
-                );
-                yield Ok(Event::default().event("response.failed").data(
-                    json!({"type": "response.failed", "response": {"id": &response_id, "status": "failed", "error": {"code": status.as_u16().to_string(), "message": body}}}).to_string()
-                ));
-                return;
-            }
-            Err(e) => {
-                error!(
-                    response_id = %response_id,
-                    elapsed_ms = started.elapsed().as_millis() as u64,
-                    "upstream request failed: {e}"
-                );
-                yield Ok(Event::default().event("response.failed").data(
-                    json!({"type": "response.failed", "response": {"id": &response_id, "status": "failed", "error": {"code": "connection_error", "message": e.to_string()}}}).to_string()
-                ));
-                return;
-            }
-        };
 
         let mut accumulated_text = String::new();
         let mut accumulated_reasoning = String::new();
@@ -402,7 +443,13 @@ pub fn translate_stream(
         // (text and/or tool calls), treat it as complete so the response is
         // persisted and `response.completed` is emitted. A mid-stream error
         // (stream_err) still discards the partial turn.
-        if !stream_done && !stream_err && (!accumulated_text.is_empty() || !tool_calls.is_empty()) {
+        if should_finalize_stream_without_done(
+            stream_done,
+            stream_err,
+            !accumulated_text.is_empty(),
+            !tool_calls.is_empty(),
+            !accumulated_reasoning.is_empty(),
+        ) {
             warn!("stream ended without [DONE] but content was received — treating as complete");
             stream_done = true;
         }
@@ -413,7 +460,7 @@ pub fn translate_stream(
             // back when Codex replays function_call items in the next request.
             for tc in tool_calls.values() {
                 if !tc.id.is_empty() {
-                    sessions.store_reasoning(tc.id.clone(), accumulated_reasoning.clone());
+                    sessions.store_reasoning(&provider, tc.id.clone(), accumulated_reasoning.clone());
                 }
             }
 
@@ -438,14 +485,14 @@ pub fn translate_stream(
             // Index reasoning by turn fingerprint so it can be recovered when
             // Codex replays the full conversation in input[] without previous_response_id.
             if !accumulated_reasoning.is_empty() {
-                sessions.store_turn_reasoning(&request_messages, &assistant_msg, accumulated_reasoning.clone());
+                sessions.store_turn_reasoning(&provider, &request_messages, &assistant_msg, accumulated_reasoning.clone());
             }
 
             // Save the full request conversation (including current input items)
             // so that history is complete for the next turn.
             let mut messages = request_messages;
             messages.push(assistant_msg);
-            sessions.save_with_id(response_id.clone(), messages);
+            sessions.save_with_id(&provider, response_id.clone(), messages);
 
             // Build output array for response.completed
             let mut indexed_output_items: Vec<(usize, Value)> = Vec::new();
@@ -539,4 +586,57 @@ pub fn translate_stream(
     };
 
     Sse::new(event_stream).keep_alive(KeepAlive::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summarize_stream_tool_call_names_lists_names() {
+        let mut tool_calls = BTreeMap::new();
+        tool_calls.insert(
+            0,
+            ToolCallAccum {
+                id: "c1".into(),
+                name: "read_file".into(),
+                arguments: "{}".into(),
+            },
+        );
+        tool_calls.insert(
+            1,
+            ToolCallAccum {
+                id: "c2".into(),
+                name: "grep".into(),
+                arguments: "{}".into(),
+            },
+        );
+        assert_eq!(
+            summarize_stream_tool_call_names(&tool_calls),
+            "read_file, grep"
+        );
+        assert_eq!(summarize_stream_tool_call_names(&BTreeMap::new()), "(none)");
+    }
+
+    #[test]
+    fn should_finalize_stream_without_done_when_content_received() {
+        assert!(should_finalize_stream_without_done(
+            false, false, true, false, false
+        ));
+        assert!(should_finalize_stream_without_done(
+            false, false, false, true, false
+        ));
+        assert!(should_finalize_stream_without_done(
+            false, false, false, false, true
+        ));
+        assert!(!should_finalize_stream_without_done(
+            true, false, true, false, false
+        ));
+        assert!(!should_finalize_stream_without_done(
+            false, true, true, false, false
+        ));
+        assert!(!should_finalize_stream_without_done(
+            false, false, false, false, false
+        ));
+    }
 }

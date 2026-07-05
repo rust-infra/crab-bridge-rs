@@ -1,10 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use std::net::SocketAddr;
+
 use reqwest::{Client, Url};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::handlers::join_base;
+use crate::provider::{ProviderKind, apply_upstream_headers};
 
 pub struct ModelProps {
     pub context_window: u32,
@@ -19,10 +22,14 @@ pub fn estimate_model_properties(model_id: &str) -> ModelProps {
     let has_reasoning = lower.contains("reasoner")
         || lower.contains("r1")
         || lower.contains("thinking")
-        || lower.contains("deepseek-v4");
+        || lower.contains("deepseek-v4")
+        || lower.contains("kimi")
+        || lower.contains("moonshot");
 
     let (ctx, max_ctx) = if lower.contains("deepseek") {
         (262_144, 1_048_576)
+    } else if lower.contains("kimi") || lower.contains("moonshot") {
+        (262_144, 262_144)
     } else {
         (128_000, 128_000)
     };
@@ -41,12 +48,70 @@ pub async fn print_codex_config(
     api_key: &str,
     provider_name: &str,
     default_model: &str,
+    bind_addr: &SocketAddr,
+    route_slug: &str,
 ) {
-    let url = format!("{}models", join_base(upstream));
-    let mut builder = client.get(&url);
-    if !api_key.is_empty() {
-        builder = builder.bearer_auth(api_key);
+    let kind = ProviderKind::from_base_url(upstream.as_str());
+    let models = prepare_model_catalog(client, upstream, api_key, kind, default_model).await;
+
+    let preferred = preferred_model(&models, kind, default_model);
+
+    let catalog_path = catalog_path_for_slug(route_slug);
+    match write_model_catalog(&catalog_path, &models) {
+        Ok(()) => {
+            eprintln!("// Wrote Codex model catalog to {}", catalog_path.display());
+        }
+        Err(e) => {
+            eprintln!(
+                "// Failed to write model catalog to {}: {e}",
+                catalog_path.display()
+            );
+            eprintln!("// Paste the JSON block at the end of this output into that path yourself.");
+        }
     }
+
+    let env_key = kind.codex_env_key();
+    let bridge_base_url = format!("http://{bind_addr}/{route_slug}/v1");
+    println!(
+        "# ── Codex config snippet for CrabBridge + {} ──",
+        kind.label()
+    );
+    println!("# Copy the lines below into ~/.codex/config.toml");
+    println!("#");
+    println!("# Codex 0.105+ ignores [model_properties.*]. Metadata must come from");
+    println!("# model_catalog_json (a ModelsResponse JSON file). Setting this path");
+    println!("# replaces Codex's remote model catalog for this config.");
+    println!();
+    println!("model_provider = \"{provider_name}\"");
+    println!("model = \"{preferred}\"");
+    println!("model_catalog_json = \"{}\"", catalog_path.display());
+    println!();
+    println!("[model_providers.{provider_name}]");
+    println!("name = \"{provider_name}\"");
+    println!("base_url = \"{bridge_base_url}\"");
+    println!("wire_api = \"responses\"");
+    println!("env_key = \"{env_key}\"");
+    println!();
+
+    // Also print the catalog JSON so users can copy it if the write failed.
+    let catalog = build_model_catalog(&models);
+    println!("# ── Optional: contents of {} ──", catalog_path.display());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&catalog).unwrap_or_else(|_| "{}".into())
+    );
+}
+
+/// Fetch upstream models and merge with provider-known defaults.
+pub async fn prepare_model_catalog(
+    client: &Client,
+    upstream: &Url,
+    api_key: &str,
+    kind: ProviderKind,
+    default_model: &str,
+) -> Vec<String> {
+    let url = format!("{}models", join_base(upstream));
+    let builder = apply_upstream_headers(client.get(&url), kind, api_key);
 
     let mut models: Vec<String> = match builder.send().await {
         Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
@@ -71,93 +136,63 @@ pub async fn print_codex_config(
         }
     };
 
-    // Always include the configured default and common DeepSeek models so Codex
-    // has catalog entries even when /v1/models omits them.
-    for known in known_deepseek_models(default_model) {
+    models.retain(|m| kind.model_matches_provider(m));
+
+    for known in known_models_for(kind, upstream.as_str(), default_model) {
         if !models.iter().any(|m| m == &known) {
             models.push(known);
         }
     }
 
-    let preferred = if models.iter().any(|m| m == default_model) {
+    models
+}
+
+fn preferred_model(models: &[String], kind: ProviderKind, default_model: &str) -> String {
+    if models.iter().any(|m| m == default_model) {
         default_model.to_string()
     } else {
         models
             .iter()
-            .find(|m| m.contains("deepseek"))
+            .find(|m| match kind {
+                ProviderKind::Kimi => {
+                    *m == "kimi-for-coding" || m.contains("kimi") || m.contains("moonshot")
+                }
+                ProviderKind::DeepSeek => m.contains("deepseek"),
+                ProviderKind::Custom => true,
+            })
             .or(models.first())
             .cloned()
             .unwrap_or_else(|| default_model.to_string())
-    };
-
-    let catalog_path = default_catalog_path();
-    match write_model_catalog(&catalog_path, &models) {
-        Ok(()) => {
-            eprintln!(
-                "// Wrote Codex model catalog to {}",
-                catalog_path.display()
-            );
-        }
-        Err(e) => {
-            eprintln!(
-                "// Failed to write model catalog to {}: {e}",
-                catalog_path.display()
-            );
-            eprintln!("// Paste the JSON block at the end of this output into that path yourself.");
-        }
     }
-
-    println!("# ── Codex config snippet for CrabBridge + DeepSeek ──");
-    println!("# Copy the lines below into ~/.codex/config.toml");
-    println!("#");
-    println!("# Codex 0.105+ ignores [model_properties.*]. Metadata must come from");
-    println!("# model_catalog_json (a ModelsResponse JSON file). Setting this path");
-    println!("# replaces Codex's remote model catalog for this config.");
-    println!();
-    println!("model_provider = \"{provider_name}\"");
-    println!("model = \"{preferred}\"");
-    println!(
-        "model_catalog_json = \"{}\"",
-        catalog_path.display()
-    );
-    println!();
-    println!("[model_providers.{provider_name}]");
-    println!("name = \"{provider_name}\"");
-    println!("base_url = \"http://127.0.0.1:11435/v1\"");
-    println!("wire_api = \"responses\"");
-    println!("env_key = \"DEEPSEEK_API_KEY\"");
-    println!();
-
-    // Also print the catalog JSON so users can copy it if the write failed.
-    let catalog = build_model_catalog(&models);
-    println!("# ── Optional: contents of {} ──", catalog_path.display());
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&catalog).unwrap_or_else(|_| "{}".into())
-    );
 }
 
-/// Models Codex commonly selects when using DeepSeek via CrabBridge.
-fn known_deepseek_models(default_model: &str) -> Vec<String> {
-    let mut models = vec![
-        "deepseek-chat".into(),
-        "deepseek-reasoner".into(),
-        "deepseek-v4-pro".into(),
-        "deepseek-v4-flash".into(),
-    ];
+fn known_models_for(kind: ProviderKind, base_url: &str, default_model: &str) -> Vec<String> {
+    let mut models: Vec<String> = kind
+        .known_models_for_upstream(base_url)
+        .iter()
+        .map(|m| (*m).to_string())
+        .collect();
     if !models.iter().any(|m| m == default_model) {
         models.insert(0, default_model.to_string());
     }
     models
 }
 
-fn default_catalog_path() -> PathBuf {
+pub fn catalog_path_for_slug(slug: &str) -> PathBuf {
+    codex_home_dir()
+        .map(|h| h.join(format!("crabbridge-models-{slug}.json")))
+        .unwrap_or_else(|| PathBuf::from(format!("crabbridge-models-{slug}.json")))
+}
+
+pub fn default_catalog_path() -> PathBuf {
+    catalog_path_for_slug("deepseek")
+}
+
+pub fn codex_home_dir() -> Option<PathBuf> {
     if let Ok(home) = std::env::var("CODEX_HOME") {
-        return PathBuf::from(home).join("crabbridge-models.json");
+        return Some(PathBuf::from(home));
     }
-    dirs_home()
-        .map(|h| h.join(".codex").join("crabbridge-models.json"))
-        .unwrap_or_else(|| PathBuf::from("crabbridge-models.json"))
+    dirs_home().map(|h| h.join(".codex"))
 }
 
 fn dirs_home() -> Option<PathBuf> {
@@ -166,7 +201,7 @@ fn dirs_home() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn write_model_catalog(path: &Path, models: &[String]) -> std::io::Result<()> {
+pub fn write_model_catalog(path: &Path, models: &[String]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -268,5 +303,16 @@ mod tests {
         assert!(model.get("upgrade").is_some());
         assert!(model.get("default_verbosity").is_some());
         assert!(model.get("apply_patch_tool_type").is_some());
+    }
+
+    #[test]
+    fn kimi_for_coding_has_reasoning_metadata() {
+        let props = estimate_model_properties("kimi-for-coding");
+        assert!(props.supports_reasoning_summaries);
+        assert_eq!(props.context_window, 262_144);
+
+        let catalog = build_model_catalog(&["kimi-for-coding".into()]);
+        assert_eq!(catalog["models"][0]["slug"], "kimi-for-coding");
+        assert_eq!(catalog["models"][0]["supports_reasoning_summaries"], true);
     }
 }

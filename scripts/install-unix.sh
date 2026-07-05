@@ -28,7 +28,7 @@ Options:
 
 Environment:
   PREFIX, CONFIG_DIR, BUILD_DIR, SKIP_BUILD
-  DEEPSEEK_API_KEY   If set, written into the generated .env file
+  DEEPSEEK_API_KEY   If set, written into the generated config.toml
 
 Examples:
   ./scripts/install-${OS_NAME}.sh
@@ -115,42 +115,46 @@ install_config() {
     mkdir -p "${CONFIG_DIR}"
     mkdir -p "${CONFIG_DIR}/data"
 
-    local env_file="${CONFIG_DIR}/.env"
-    if [[ -f "${env_file}" ]]; then
-        warn "Config already exists: ${env_file} (unchanged)"
+    local config_file="${CONFIG_DIR}/config.toml"
+    if [[ -f "${config_file}" ]]; then
+        warn "Config already exists: ${config_file} (unchanged)"
         return
     fi
 
-    if [[ -f "${REPO_ROOT}/.env.example" ]]; then
-        cp "${REPO_ROOT}/.env.example" "${env_file}"
+    if [[ -f "${REPO_ROOT}/crabbridge.example.toml" ]]; then
+        cp "${REPO_ROOT}/crabbridge.example.toml" "${config_file}"
     else
-        cat >"${env_file}" <<'EOF'
-DEEPSEEK_API_KEY=sk-your-api-key-here
-DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
-DEEPSEEK_MODEL=deepseek-chat
-BRIDGE_ADDR=127.0.0.1:11435
-LOG_LEVEL=info
-SESSION_DB=data/crabbridge.db
-SESSION_MEMORY_ONLY=false
+        cat >"${config_file}" <<'EOF'
+default_provider = "deepseek"
+
+[providers.deepseek]
+api_key = "sk-your-api-key-here"
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-v4-pro"
+
+[providers.kimi]
+api_key = "sk-your-kimi-code-key"
+base_url = "https://api.kimi.com/coding/v1"
+model = "kimi-for-coding"
+
+[server]
+bind_addr = "127.0.0.1:11435"
+log_level = "info"
+
+[session]
+db = "data/crabbridge.db"
+memory_only = false
 EOF
     fi
 
     if [[ -n "${DEEPSEEK_API_KEY:-}" ]]; then
-        if grep -q '^DEEPSEEK_API_KEY=' "${env_file}"; then
-            sed -i.bak "s|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}|" "${env_file}"
-            rm -f "${env_file}.bak"
-        else
-            echo "DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}" >>"${env_file}"
+        if grep -q '^api_key = ' "${config_file}"; then
+            sed -i.bak "s|^api_key = .*|api_key = \"${DEEPSEEK_API_KEY}\"|" "${config_file}"
+            rm -f "${config_file}.bak"
         fi
     fi
 
-    # Use config-relative session DB path
-    if grep -q '^SESSION_DB=' "${env_file}"; then
-        sed -i.bak 's|^SESSION_DB=.*|SESSION_DB=data/crabbridge.db|' "${env_file}"
-        rm -f "${env_file}.bak"
-    fi
-
-    log "Created config: ${env_file}"
+    log "Created config: ${config_file}"
 }
 
 path_hint() {
@@ -176,14 +180,14 @@ print_next_steps() {
 CrabBridge installed successfully.
 
   Binary:  ${BIN_DIR}/${BINARY_NAME}
-  Config:  ${CONFIG_DIR}/.env
+  Config:  ${CONFIG_DIR}/config.toml
 
 Next steps:
-  1. Edit ${CONFIG_DIR}/.env and set DEEPSEEK_API_KEY
+  1. Edit ${CONFIG_DIR}/config.toml and set upstream.api_key
   2. Start the bridge:
-       cd ${CONFIG_DIR} && ${BIN_DIR}/${BINARY_NAME} serve
-  3. Generate Codex config:
-       ${BIN_DIR}/${BINARY_NAME} print-codex-config --api-key \$DEEPSEEK_API_KEY
+       ${BIN_DIR}/${BINARY_NAME} serve
+  3. Configure Codex:
+       ${BIN_DIR}/${BINARY_NAME} setup
   4. Test:
        ${BIN_DIR}/${BINARY_NAME} prompt "Hello"
 EOF

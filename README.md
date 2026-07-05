@@ -1,13 +1,20 @@
 # 🦀 CrabBridge
 
-A lightweight Rust proxy that lets **Codex CLI** talk to **DeepSeek** via the OpenAI Responses API.
+A lightweight Rust proxy that lets **Codex CLI** talk to **DeepSeek** or **Kimi Code** (`kimi-for-coding`) via the OpenAI Responses API.
 
-CrabBridge accepts Responses API requests from Codex, converts them to DeepSeek Chat Completions, and translates responses (including streaming SSE) back to the Responses format. Multi-turn conversations are persisted in SQLite so sessions survive restarts.
+CrabBridge accepts Responses API requests from Codex, converts them to upstream Chat Completions, and translates responses (including streaming SSE) back to the Responses format. Multi-turn conversations are persisted in SQLite so sessions survive restarts.
 
 ```
-Codex CLI  ──Responses API──▶  CrabBridge  ──Chat Completions──▶  DeepSeek
-              /v1/responses              /v1/chat/completions
+Codex CLI  ──Responses API──▶  CrabBridge  ──Chat Completions──▶  DeepSeek / Kimi Code
+         /{provider}/v1/responses              /v1/chat/completions
 ```
+
+One `crabridge serve` process can host **multiple upstream providers** at once. Codex selects the upstream via `base_url` path:
+
+- `http://127.0.0.1:11435/deepseek/v1`
+- `http://127.0.0.1:11435/kimi/v1`
+
+Legacy `/v1/*` routes still work and map to `default_provider`.
 
 ## Features
 
@@ -21,17 +28,33 @@ Codex CLI  ──Responses API──▶  CrabBridge  ──Chat Completions─�
 ## Requirements
 
 - [Rust](https://rustup.rs/) 1.75+ (for building from source)
-- A [DeepSeek API key](https://platform.deepseek.com/)
+- An upstream API key:
+  - [DeepSeek](https://platform.deepseek.com/), or
+  - [Kimi Code](https://www.kimi.com/code/docs/en/) (`KIMI_API_KEY`, model `kimi-for-coding`)
 
 ## Quick Start
 
-```bash
-# Clone and configure
-git clone <repo-url> crab-bridge-rs && cd crab-bridge-rs
-cp .env.example .env
-# Edit .env and set DEEPSEEK_API_KEY
+### DeepSeek (default)
 
-# Run
+```bash
+cp crabbridge.example.toml crabbridge.toml
+# set DEEPSEEK_API_KEY in your shell, or use [upstream] api_key in TOML
+cargo run -- serve
+```
+
+### Multi-provider (recommended)
+
+```bash
+cp crabbridge.example.toml crabbridge.toml
+# fill [providers.deepseek] and [providers.kimi] api_key values
+cargo run -- setup --all-providers   # writes Codex + crabbridge.toml
+cargo run -- serve
+```
+
+### Single provider
+
+```bash
+cargo run -- setup --provider kimi --api-key sk-xxx
 cargo run -- serve
 ```
 
@@ -39,7 +62,7 @@ In another terminal:
 
 ```bash
 cargo run -- prompt "Hello"
-cargo run -- print-codex-config --api-key $DEEPSEEK_API_KEY
+cargo run -- setup --docker   # check configuration
 ```
 
 ## Installation
@@ -56,8 +79,8 @@ Install scripts build a release binary and set up a config directory.
 
 | Platform | Binary | Config |
 |----------|--------|--------|
-| macOS / Linux | `~/.local/bin/crabridge` | `~/.config/crabbridge/.env` |
-| Windows | `%LOCALAPPDATA%\crabbridge\bin\crabridge.exe` | `%APPDATA%\crabbridge\.env` |
+| macOS / Linux | `~/.local/bin/crabridge` | `~/.config/crabbridge/config.toml` |
+| Windows | `%LOCALAPPDATA%\crabbridge\bin\crabridge.exe` | `%APPDATA%\crabbridge\config.toml` |
 
 **Examples**
 
@@ -84,81 +107,113 @@ $env:DEEPSEEK_API_KEY = "sk-xxx"
    crabridge serve
    ```
 
-2. Generate a Codex provider snippet (also writes `~/.codex/crabbridge-models.json`):
+2. Generate Codex provider snippets (writes `~/.codex/crabbridge-models-{provider}.json`):
 
    ```bash
-   crabridge print-codex-config --api-key $DEEPSEEK_API_KEY --model deepseek-v4-pro
+   # both providers
+   crabridge setup --all-providers
+
+   # or one at a time
+   crabridge print-codex-config --provider deepseek
+   crabridge print-codex-config --provider kimi
    ```
 
-3. Paste the printed TOML into `~/.codex/config.toml`. Minimal form:
+3. Paste into `~/.codex/config.toml`. Multi-provider form:
 
    ```toml
-   model_provider = "crabbridge"
+   model_provider = "crabbridge-deepseek"
    model = "deepseek-v4-pro"
-   model_catalog_json = "/Users/YOU/.codex/crabbridge-models.json"
+   model_catalog_json = "/Users/YOU/.codex/crabbridge-models-deepseek.json"
 
-   [model_providers.crabbridge]
-   name = "crabbridge"
-   base_url = "http://127.0.0.1:11435/v1"
+   [model_providers.crabbridge-deepseek]
+   name = "crabbridge-deepseek"
+   base_url = "http://127.0.0.1:11435/deepseek/v1"
    wire_api = "responses"
    env_key = "DEEPSEEK_API_KEY"
+
+   [model_providers.crabbridge-kimi]
+   name = "crabbridge-kimi"
+   base_url = "http://127.0.0.1:11435/kimi/v1"
+   wire_api = "responses"
+   env_key = "KIMI_API_KEY"
+   model_catalog_json = "/Users/YOU/.codex/crabbridge-models-kimi.json"
    ```
 
-   Codex **0.105+ ignores `[model_properties.*]`**. Metadata must come from
-   `model_catalog_json` (a full model catalog JSON). Without it you will see:
-   `Model metadata for ... not found`.
-
-   Note: setting `model_catalog_json` replaces Codex's remote OpenAI model list
-   for this config — only models in that file are available.
-
-4. Restart Codex and select the `crabbridge` provider.
+   Switch providers in Codex by changing `model_provider` (and `model`).
 
 ## Configuration
 
-Copy `.env.example` to `.env` (or use the path created by the install script). All options can also be passed as CLI flags.
+CrabBridge reads a TOML config file. Search order:
 
-### Required
+1. `--config PATH` or `CRABRIDGE_CONFIG`
+2. `./crabbridge.toml`
+3. `~/.config/crabbridge/config.toml` (Windows: `%APPDATA%\crabbridge\config.toml`)
+
+Priority: **CLI flags > environment variables > TOML file > defaults**.
+
+Copy `crabbridge.example.toml` to `crabbridge.toml`, or run `crabridge setup`.
+
+Priority: **CLI flags > environment variables > TOML file > defaults**.
+
+### Global config path
+
+| Source | Description |
+|--------|-------------|
+| `--config PATH` | Explicit TOML file path |
+| `CRABRIDGE_CONFIG` | Environment variable pointing to a TOML file |
+| `./crabbridge.toml` | Default filename in the current directory |
+| `~/.config/crabbridge/config.toml` | System default (Windows: `%APPDATA%\crabbridge\config.toml`) |
+
+Config values are loaded **before** CLI parsing, so `env = ...` defaults in CLI flags also honor the TOML file.
+
+### Useful environment variables
 
 | Variable | Description |
 |----------|-------------|
-| `DEEPSEEK_API_KEY` | DeepSeek API key |
+| `DEEPSEEK_API_KEY` | DeepSeek upstream key (used by Codex `env_key`) |
+| `KIMI_API_KEY` | Kimi Code upstream key (used by Codex `env_key`) |
+| `CRABRIDGE_CONFIG` | Path to `crabbridge.toml` |
+| `CRABRIDGE_{SLUG}_BASE_URL` | Override base URL for a provider, e.g. `CRABRIDGE_DEEPSEEK_BASE_URL` |
+| `CRABRIDGE_{SLUG}_MODEL_MAP` | Per-provider model map |
+| `UPSTREAM_BASE_URL` | Global fallback base URL (also set by legacy `[upstream] base_url`) |
+| `BRIDGE_ADDR` | Server listen address |
+| `SESSION_DB` | SQLite database path |
+| `CRABRIDGE_MODEL_MAP` | Global model map |
+| `CRABRIDGE_TOOL_DENYLIST` | Comma-separated tools to block |
 
-### Core
+```toml
+default_provider = "deepseek"
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/v1` | Upstream API base URL |
-| `DEEPSEEK_MODEL` | `deepseek-chat` | Default DeepSeek model |
-| `BRIDGE_ADDR` | `127.0.0.1:11435` | Listen address |
-| `LOG_LEVEL` | `info` | Log level |
+[providers.deepseek]
+base_url = "https://api.deepseek.com/v1"
+model_map = "gpt-5.4:deepseek-v4-pro"
 
-### Session storage
+[providers.kimi]
+base_url = "https://api.kimi.com/coding/v1"
+model_map = "gpt-5.4:kimi-for-coding"
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SESSION_DB` | `data/crabbridge.db` | SQLite database path |
-| `SESSION_MEMORY_ONLY` | `false` | Disable SQLite, use memory only |
-| `MAX_SESSIONS` | `256` | Max concurrent sessions |
-| `SESSION_TTL_HOURS` | `168` | Session TTL (7 days) |
+[server]
+bind_addr = "127.0.0.1:11435"
+```
 
-### Optional
+Provider sections support `base_url` (override upstream endpoint) and `model_map` (Codex model name → upstream model name). The legacy `[upstream]` section (`base_url`, `api_key`, `model`) is still supported and is used as a global fallback.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CRABRIDGE_MODEL_MAP` | — | Map Codex models to DeepSeek, e.g. `gpt-5.4:deepseek-chat` |
-| `CRABRIDGE_TOOL_DENYLIST` | — | Comma-separated tools to block |
-| `CACHE_ENABLED` | `false` | Enable response cache |
-| `RATE_LIMIT_RPS` | `0` | Global rate limit (0 = off) |
+API keys are resolved from the Codex request header and forwarded to the matching provider; set them as shell environment variables (e.g. `DEEPSEEK_API_KEY`, `KIMI_API_KEY`).
 
-See `.env.example` for the full list.
+SQLite session/reasoning rows are scoped by `provider` so Kimi and DeepSeek histories do not mix.
 
 ## CLI
 
 ```bash
-crabridge serve                  # Start the bridge server
-crabridge prompt "Hello"         # Send a test request
+crabridge serve                                # Start the bridge server
+crabridge serve --config crabbridge.toml       # Use an explicit config file
+crabridge setup                                # Write Codex + crabbridge.toml
+crabridge setup --docker                       # Check current configuration
+crabridge prompt "Hello"                       # Send a test request
 crabridge prompt "Hello" --stream
-crabridge print-codex-config     # Print Codex config snippet
+crabridge setup --all-providers                # Configure deepseek + kimi at once
+crabridge prompt "Hello" --provider kimi
+crabridge print-codex-config --all-providers
 ```
 
 ## API Endpoints
@@ -166,8 +221,9 @@ crabridge print-codex-config     # Print Codex config snippet
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
-| `GET` | `/v1/models` | Proxy DeepSeek model list |
-| `POST` | `/v1/responses` | Responses API (Codex entry point) |
+| `GET` | `/{provider}/v1/models` | Proxy upstream model list |
+| `POST` | `/{provider}/v1/responses` | Responses API (Codex entry point) |
+| `GET/POST` | `/v1/*` | Legacy routes → `default_provider` |
 
 `/v1/chat/completions` is **not** exposed on the bridge.
 
