@@ -299,7 +299,7 @@ async fn handle_responses_inner(
         let response_id = state.sessions.new_id();
         chat_req.stream = true;
         let request_messages = chat_req.messages.clone();
-        stream::translate_stream(StreamArgs {
+        let args = StreamArgs {
             client: state.client,
             url,
             api_key,
@@ -312,8 +312,20 @@ async fn handle_responses_inner(
             namespace_tools,
             model,
             started,
-        })
-        .into_response()
+        };
+        match stream::prepare_upstream(&args).await {
+            Ok(upstream) => stream::translate_stream(args, upstream).into_response(),
+            Err(stream::UpstreamError::BodyError(msg)) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response()
+            }
+            Err(stream::UpstreamError::ConnectionError(msg)) => {
+                (StatusCode::BAD_GATEWAY, msg).into_response()
+            }
+            Err(stream::UpstreamError::UpstreamError { status, body }) => {
+                let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+                (status, body).into_response()
+            }
+        }
     } else {
         chat_req.stream = false;
         handle_blocking(BlockingArgs {

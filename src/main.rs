@@ -29,12 +29,44 @@ use crab_bridge_rs::provider::{ProviderKind, bootstrap_upstream_env};
 use crab_bridge_rs::setup::{self, SetupOptions, print_setup_summary};
 use crab_bridge_rs::state::{AppState, ProviderRuntime};
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let cli = Cli::parse();
-    load_config_into_env(cli.config.clone())?;
-    bootstrap_upstream_env();
+fn config_path_from_args() -> Option<std::path::PathBuf> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            break;
+        }
+        if arg == "--config" {
+            return args.next().map(std::path::PathBuf::from);
+        }
+        if let Some(value) = arg.strip_prefix("--config=") {
+            return Some(std::path::PathBuf::from(value));
+        }
+        if arg == "-c" {
+            return args.next().map(std::path::PathBuf::from);
+        }
+        if arg.starts_with("-c") && arg.len() > 2 {
+            return Some(std::path::PathBuf::from(&arg[2..]));
+        }
+    }
+    None
+}
 
+fn main() -> Result<()> {
+    let config_path = config_path_from_args().or_else(|| {
+        std::env::var("CRABRIDGE_CONFIG")
+            .ok()
+            .map(std::path::PathBuf::from)
+    });
+    load_config_into_env(config_path)?;
+    bootstrap_upstream_env();
+    let cli = Cli::parse();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main(cli))
+}
+
+async fn async_main(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Serve(serve) => run_serve(serve, cli.config.clone()).await,
         Commands::Prompt {
@@ -100,7 +132,23 @@ async fn run_serve(serve: ServeArgs, config_path: Option<std::path::PathBuf>) ->
     let mut providers = HashMap::new();
     for (slug, entry) in &resolved.providers {
         let kind = ProviderKind::from_route(slug).unwrap_or(ProviderKind::Custom);
-        let upstream = validate_upstream_url(kind.default_base_url())?;
+        let slug_upper = slug.to_ascii_uppercase();
+        let base_url = entry
+            .base_url
+            .clone()
+            .filter(|u| !u.is_empty())
+            .or_else(|| {
+                std::env::var(format!("CRABRIDGE_{slug_upper}_BASE_URL"))
+                    .ok()
+                    .filter(|u| !u.is_empty())
+            })
+            .or_else(|| {
+                std::env::var("UPSTREAM_BASE_URL")
+                    .ok()
+                    .filter(|u| !u.is_empty())
+            })
+            .unwrap_or_else(|| kind.default_base_url().to_string());
+        let upstream = validate_upstream_url(&base_url)?;
         providers.insert(
             slug.clone(),
             ProviderRuntime {

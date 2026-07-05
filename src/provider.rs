@@ -268,7 +268,9 @@ pub fn apply_upstream_headers(
 /// Resolve provider aliases into `UPSTREAM_*` before Clap reads the environment.
 pub fn bootstrap_upstream_env() {
     let provider = env::var("CRABRIDGE_PROVIDER")
-        .or_else(|_| env::var("PROVIDER"))
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| env::var("PROVIDER").ok().filter(|v| !v.is_empty()))
         .map(|v| ProviderKind::parse(&v))
         .unwrap_or(ProviderKind::DeepSeek);
 
@@ -306,7 +308,7 @@ pub fn bootstrap_upstream_env() {
 }
 
 fn alias_first(target: &str, sources: &[&str]) {
-    if env::var_os(target).is_some() {
+    if env::var(target).is_ok_and(|v| !v.is_empty()) {
         return;
     }
     for source in sources {

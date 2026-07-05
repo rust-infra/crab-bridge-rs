@@ -78,17 +78,20 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub fn read_session(&self, id: &str) -> Option<DiskSessionRecord> {
+    pub fn read_session(&self, id: &str) -> io::Result<Option<DiskSessionRecord>> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT response_id, provider, created_at_ms, last_used_at_ms, bytes, messages_json
                  FROM sessions WHERE response_id = ?1",
             )
-            .ok()?;
-        let mut rows = stmt.query(params![id]).ok()?;
-        let row = rows.next().ok()??;
-        row_to_session_record(row).ok()
+            .map_err(io::Error::other)?;
+        let mut rows = stmt.query(params![id]).map_err(io::Error::other)?;
+        let row = match rows.next().map_err(io::Error::other)? {
+            Some(row) => row,
+            None => return Ok(None),
+        };
+        Ok(Some(row_to_session_record(row).map_err(io::Error::other)?))
     }
 
     pub fn load_sessions(&self) -> Vec<DiskSessionRecord> {
@@ -113,13 +116,11 @@ impl SqliteStore {
         rows.filter_map(Result::ok).collect()
     }
 
-    pub fn remove_session(&self, id: &str) {
-        if let Err(e) = self
-            .conn
+    pub fn remove_session(&self, id: &str) -> io::Result<()> {
+        self.conn
             .execute("DELETE FROM sessions WHERE response_id = ?1", params![id])
-        {
-            warn!("failed to delete sqlite session {id}: {e}");
-        }
+            .map_err(io::Error::other)?;
+        Ok(())
     }
 
     pub fn write_reasoning(
@@ -164,7 +165,7 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub fn read_reasoning(&self, key: &str) -> Option<DiskReasoningRecord> {
+    pub fn read_reasoning(&self, key: &str) -> io::Result<Option<DiskReasoningRecord>> {
         self.read_reasoning_row("reasoning", key)
     }
 
@@ -172,13 +173,11 @@ impl SqliteStore {
         self.load_reasoning_rows("reasoning")
     }
 
-    pub fn remove_reasoning(&self, key: &str) {
-        if let Err(e) = self
-            .conn
+    pub fn remove_reasoning(&self, key: &str) -> io::Result<()> {
+        self.conn
             .execute("DELETE FROM reasoning WHERE key = ?1", params![key])
-        {
-            warn!("failed to delete sqlite reasoning {key}: {e}");
-        }
+            .map_err(io::Error::other)?;
+        Ok(())
     }
 
     pub fn write_turn_reasoning(
@@ -223,7 +222,7 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub fn read_turn_reasoning(&self, key: u64) -> Option<DiskReasoningRecord> {
+    pub fn read_turn_reasoning(&self, key: u64) -> io::Result<Option<DiskReasoningRecord>> {
         self.read_reasoning_row("turn_reasoning", &key.to_string())
     }
 
@@ -231,23 +230,33 @@ impl SqliteStore {
         self.load_reasoning_rows("turn_reasoning")
     }
 
-    pub fn remove_turn_reasoning(&self, key: u64) {
-        if let Err(e) = self.conn.execute(
-            "DELETE FROM turn_reasoning WHERE key = ?1",
-            params![key.to_string()],
-        ) {
-            warn!("failed to delete sqlite turn reasoning {key}: {e}");
-        }
+    pub fn remove_turn_reasoning(&self, key: u64) -> io::Result<()> {
+        self.conn
+            .execute(
+                "DELETE FROM turn_reasoning WHERE key = ?1",
+                params![key.to_string()],
+            )
+            .map_err(io::Error::other)?;
+        Ok(())
     }
 
-    fn read_reasoning_row(&self, table: &str, key: &str) -> Option<DiskReasoningRecord> {
+    fn read_reasoning_row(
+        &self,
+        table: &str,
+        key: &str,
+    ) -> io::Result<Option<DiskReasoningRecord>> {
         let sql = format!(
             "SELECT key, provider, created_at_ms, last_used_at_ms, bytes, value FROM {table} WHERE key = ?1"
         );
-        let mut stmt = self.conn.prepare(&sql).ok()?;
-        let mut rows = stmt.query(params![key]).ok()?;
-        let row = rows.next().ok()??;
-        row_to_reasoning_record(row).ok()
+        let mut stmt = self.conn.prepare(&sql).map_err(io::Error::other)?;
+        let mut rows = stmt.query(params![key]).map_err(io::Error::other)?;
+        let row = match rows.next().map_err(io::Error::other)? {
+            Some(row) => row,
+            None => return Ok(None),
+        };
+        Ok(Some(
+            row_to_reasoning_record(row).map_err(io::Error::other)?,
+        ))
     }
 
     fn load_reasoning_rows(&self, table: &str) -> Vec<DiskReasoningRecord> {
@@ -276,7 +285,8 @@ impl SqliteStore {
 
 fn row_to_session_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<DiskSessionRecord> {
     let messages_json: String = row.get(5)?;
-    let messages: Vec<ChatMessage> = serde_json::from_str(&messages_json).unwrap_or_default();
+    let messages: Vec<ChatMessage> = serde_json::from_str(&messages_json)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
     Ok(DiskSessionRecord {
         response_id: row.get(0)?,
         provider: row.get(1)?,
@@ -394,19 +404,19 @@ mod tests {
             .expect("write turn reasoning");
 
         let session = store.read_session("resp_1").expect("read session");
-        assert_eq!(session.messages.len(), 2);
+        assert_eq!(session.unwrap().messages.len(), 2);
         assert_eq!(store.load_sessions().len(), 1);
 
         let reasoning = store.read_reasoning("call_1").expect("read reasoning");
-        assert_eq!(reasoning.value, "thinking");
+        assert_eq!(reasoning.unwrap().value, "thinking");
 
         let turn = store.read_turn_reasoning(42).expect("read turn");
-        assert_eq!(turn.value, "turn-think");
+        assert_eq!(turn.unwrap().value, "turn-think");
 
-        store.remove_session("resp_1");
-        store.remove_reasoning("call_1");
-        store.remove_turn_reasoning(42);
-        assert!(store.read_session("resp_1").is_none());
+        store.remove_session("resp_1").unwrap();
+        store.remove_reasoning("call_1").unwrap();
+        store.remove_turn_reasoning(42).unwrap();
+        assert!(store.read_session("resp_1").unwrap().is_none());
     }
 
     #[test]
@@ -422,7 +432,7 @@ mod tests {
             .write_session("kimi", "resp_1", later, later, 4, &[msg("user", "second")])
             .unwrap();
 
-        let session = store.read_session("resp_1").unwrap();
+        let session = store.read_session("resp_1").unwrap().unwrap();
         assert_eq!(session.messages[0].text_content(), "second");
         assert_eq!(session.provider, "kimi");
     }
@@ -439,7 +449,7 @@ mod tests {
         }
 
         let store = SqliteStore::open(&path).expect("reopen");
-        let session = store.read_session("resp_2").expect("read");
+        let session = store.read_session("resp_2").expect("read").unwrap();
         assert_eq!(session.messages[0].text_content(), "persist");
     }
 }

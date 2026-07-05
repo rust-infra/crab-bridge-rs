@@ -160,11 +160,11 @@ impl SessionStore {
     /// Look up stored reasoning_content for a call_id.
     pub fn get_reasoning(&self, call_id: &str) -> Option<String> {
         let mut state = self.state.lock().expect("session store mutex poisoned");
-        state.enforce_limits();
         let value = state.load_reasoning_value(call_id);
         if value.is_some() {
             state.touch_reasoning(call_id);
         }
+        state.enforce_limits();
         value
     }
 
@@ -213,11 +213,11 @@ impl SessionStore {
         }
         let key = Self::content_key(content);
         let mut state = self.state.lock().expect("session store mutex poisoned");
-        state.enforce_limits();
         let value = state.load_turn_reasoning_value(key);
         if value.is_some() {
             state.touch_turn_reasoning(key);
         }
+        state.enforce_limits();
         value
     }
 
@@ -231,11 +231,11 @@ impl SessionStore {
     /// Retrieve history for a prior response_id, or empty vec if not found.
     pub fn get_history(&self, response_id: &str) -> Vec<ChatMessage> {
         let mut state = self.state.lock().expect("session store mutex poisoned");
-        state.enforce_limits();
         let messages = state.load_session_messages(response_id);
         if !messages.is_empty() {
             state.touch_session(response_id);
         }
+        state.enforce_limits();
         messages
     }
 
@@ -502,32 +502,41 @@ impl SessionState {
     }
 
     fn remove_session_entry(&mut self, key: &str) {
+        if let Some(sqlite) = &self.sqlite
+            && let Err(e) = sqlite.remove_session(key)
+        {
+            warn!("failed to remove session {key} from sqlite: {e}");
+            return;
+        }
         if let Some(entry) = self.sessions.remove(key) {
             self.stored_bytes = self.stored_bytes.saturating_sub(entry.bytes);
-        }
-        if let Some(sqlite) = &self.sqlite {
-            sqlite.remove_session(key);
         }
     }
 
     fn remove_oldest_reasoning(&mut self) {
         if let Some(key) = self.reasoning_order.pop_front() {
+            if let Some(sqlite) = &self.sqlite
+                && let Err(e) = sqlite.remove_reasoning(&key)
+            {
+                warn!("failed to remove reasoning {key} from sqlite: {e}");
+                return;
+            }
             if let Some(entry) = self.reasoning.remove(&key) {
                 self.stored_bytes = self.stored_bytes.saturating_sub(entry.bytes);
-            }
-            if let Some(sqlite) = &self.sqlite {
-                sqlite.remove_reasoning(&key);
             }
         }
     }
 
     fn remove_oldest_turn_reasoning(&mut self) {
         if let Some(key) = self.turn_reasoning_order.pop_front() {
+            if let Some(sqlite) = &self.sqlite
+                && let Err(e) = sqlite.remove_turn_reasoning(key)
+            {
+                warn!("failed to remove turn reasoning {key} from sqlite: {e}");
+                return;
+            }
             if let Some(entry) = self.turn_reasoning.remove(&key) {
                 self.stored_bytes = self.stored_bytes.saturating_sub(entry.bytes);
-            }
-            if let Some(sqlite) = &self.sqlite {
-                sqlite.remove_turn_reasoning(key);
             }
         }
     }
@@ -538,7 +547,7 @@ impl SessionState {
             entry.last_used_at = now;
         }
         if let Some(sqlite) = &self.sqlite
-            && let Some(mut record) = sqlite.read_session(id)
+            && let Some(mut record) = sqlite.read_session(id).ok().flatten()
         {
             record.last_used_at_unix_ms = system_time_millis(now);
             if let Err(e) = sqlite.write_session_record(&record) {
@@ -555,7 +564,7 @@ impl SessionState {
             entry.last_used_at = now;
         }
         if let Some(sqlite) = &self.sqlite
-            && let Some(mut record) = sqlite.read_reasoning(call_id)
+            && let Some(mut record) = sqlite.read_reasoning(call_id).ok().flatten()
         {
             record.last_used_at_unix_ms = system_time_millis(now);
             if let Err(e) = sqlite.write_reasoning_record(&record) {
@@ -572,7 +581,7 @@ impl SessionState {
             entry.last_used_at = now;
         }
         if let Some(sqlite) = &self.sqlite
-            && let Some(mut record) = sqlite.read_turn_reasoning(hash)
+            && let Some(mut record) = sqlite.read_turn_reasoning(hash).ok().flatten()
         {
             record.last_used_at_unix_ms = system_time_millis(now);
             if let Err(e) = sqlite.write_turn_reasoning_record(&record) {
@@ -593,7 +602,8 @@ impl SessionState {
         }
         self.sqlite
             .as_ref()
-            .and_then(|sqlite| sqlite.read_session(id))
+            .and_then(|sqlite| sqlite.read_session(id).ok())
+            .flatten()
             .map(|record| record.messages)
             .unwrap_or_default()
     }
@@ -605,7 +615,8 @@ impl SessionState {
         }
         self.sqlite
             .as_ref()
-            .and_then(|sqlite| sqlite.read_reasoning(call_id))
+            .and_then(|sqlite| sqlite.read_reasoning(call_id).ok())
+            .flatten()
             .map(|record| record.value)
     }
 
@@ -616,7 +627,8 @@ impl SessionState {
         }
         self.sqlite
             .as_ref()
-            .and_then(|sqlite| sqlite.read_turn_reasoning(hash))
+            .and_then(|sqlite| sqlite.read_turn_reasoning(hash).ok())
+            .flatten()
             .map(|record| record.value)
     }
 }

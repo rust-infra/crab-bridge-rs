@@ -34,6 +34,7 @@ pub struct BridgeConfigFile {
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct ProviderSection {
     pub model_map: Option<String>,
+    pub base_url: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -85,6 +86,7 @@ pub struct AdvancedSection {
 pub struct ProviderEntry {
     pub slug: String,
     pub model_map: Option<String>,
+    pub base_url: Option<String>,
 }
 
 /// All providers served by one `crabridge serve` process.
@@ -103,6 +105,7 @@ fn builtin_provider_entries(global_model_map: Option<String>) -> HashMap<String,
                 ProviderEntry {
                     slug: (*slug).to_string(),
                     model_map: global_model_map.clone(),
+                    base_url: None,
                 },
             )
         })
@@ -196,7 +199,17 @@ pub fn apply_config_to_env(cfg: &BridgeConfigFile) {
                 &format!("CRABRIDGE_{prefix}_MODEL_MAP"),
                 section.model_map.as_deref(),
             );
+            set_if_missing(
+                &format!("CRABRIDGE_{prefix}_BASE_URL"),
+                section.base_url.as_deref(),
+            );
         }
+    }
+
+    if let Some(upstream) = &cfg.upstream {
+        set_if_missing("UPSTREAM_BASE_URL", upstream.base_url.as_deref());
+        set_if_missing("UPSTREAM_API_KEY", upstream.api_key.as_deref());
+        set_if_missing("UPSTREAM_MODEL", upstream.model.as_deref());
     }
 
     if let Some(server) = &cfg.server {
@@ -269,6 +282,7 @@ pub fn resolve_serve_providers(cfg: Option<&BridgeConfigFile>) -> Result<ServePr
                             .model_map
                             .clone()
                             .or_else(|| global_model_map.clone()),
+                        base_url: section.base_url.clone(),
                     },
                 );
             }
@@ -279,6 +293,7 @@ pub fn resolve_serve_providers(cfg: Option<&BridgeConfigFile>) -> Result<ServePr
                 ProviderEntry {
                     slug,
                     model_map: global_model_map.clone(),
+                    base_url: None,
                 },
             );
         }
