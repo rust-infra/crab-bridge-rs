@@ -123,6 +123,18 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub fn touch_session_last_used(&self, id: &str, last_used_at: SystemTime) -> io::Result<()> {
+        let updated = self
+            .conn
+            .execute(
+                "UPDATE sessions SET last_used_at_ms = ?1 WHERE response_id = ?2",
+                params![system_time_millis(last_used_at) as i64, id],
+            )
+            .map_err(io::Error::other)?;
+        warn_if_touch_missed(updated, "session", id);
+        Ok(())
+    }
+
     pub fn write_reasoning(
         &self,
         provider: &str,
@@ -177,6 +189,18 @@ impl SqliteStore {
         self.conn
             .execute("DELETE FROM reasoning WHERE key = ?1", params![key])
             .map_err(io::Error::other)?;
+        Ok(())
+    }
+
+    pub fn touch_reasoning_last_used(&self, key: &str, last_used_at: SystemTime) -> io::Result<()> {
+        let updated = self
+            .conn
+            .execute(
+                "UPDATE reasoning SET last_used_at_ms = ?1 WHERE key = ?2",
+                params![system_time_millis(last_used_at) as i64, key],
+            )
+            .map_err(io::Error::other)?;
+        warn_if_touch_missed(updated, "reasoning", key);
         Ok(())
     }
 
@@ -237,6 +261,23 @@ impl SqliteStore {
                 params![key.to_string()],
             )
             .map_err(io::Error::other)?;
+        Ok(())
+    }
+
+    pub fn touch_turn_reasoning_last_used(
+        &self,
+        key: u64,
+        last_used_at: SystemTime,
+    ) -> io::Result<()> {
+        let key_string = key.to_string();
+        let updated = self
+            .conn
+            .execute(
+                "UPDATE turn_reasoning SET last_used_at_ms = ?1 WHERE key = ?2",
+                params![system_time_millis(last_used_at) as i64, key_string.as_str()],
+            )
+            .map_err(io::Error::other)?;
+        warn_if_touch_missed(updated, "turn reasoning", &key_string);
         Ok(())
     }
 
@@ -356,6 +397,12 @@ fn system_time_millis(time: SystemTime) -> u128 {
         .as_millis()
 }
 
+fn warn_if_touch_missed(updated: usize, entity: &str, key: &str) {
+    if updated == 0 {
+        warn!("touch {entity} skipped: row not found for key {key}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,6 +464,76 @@ mod tests {
         store.remove_reasoning("call_1").unwrap();
         store.remove_turn_reasoning(42).unwrap();
         assert!(store.read_session("resp_1").unwrap().is_none());
+    }
+
+    #[test]
+    fn sqlite_touch_last_used_updates_timestamp_without_rewriting_payload() {
+        let path = temp_db("touch-session");
+        let store = SqliteStore::open(&path).expect("open sqlite");
+
+        let created = SystemTime::now();
+        store
+            .write_session(
+                "deepseek",
+                "resp_1",
+                created,
+                created,
+                12,
+                &[msg("user", "hello")],
+            )
+            .expect("write session");
+
+        let touched = created + Duration::from_secs(60);
+        store
+            .touch_session_last_used("resp_1", touched)
+            .expect("touch session");
+
+        let session = store.read_session("resp_1").expect("read session").unwrap();
+        assert_eq!(session.last_used_at_unix_ms, system_time_millis(touched));
+        assert_eq!(session.messages[0].text_content(), "hello");
+    }
+
+    #[test]
+    fn sqlite_touch_reasoning_last_used_updates_timestamp_without_rewriting_payload() {
+        let path = temp_db("touch-reasoning");
+        let store = SqliteStore::open(&path).expect("open sqlite");
+
+        let created = SystemTime::now();
+        store
+            .write_reasoning("kimi", "call_1", created, created, 8, "thinking")
+            .expect("write reasoning");
+
+        let touched = created + Duration::from_secs(60);
+        store
+            .touch_reasoning_last_used("call_1", touched)
+            .expect("touch reasoning");
+
+        let reasoning = store.read_reasoning("call_1").expect("read reasoning").unwrap();
+        assert_eq!(reasoning.last_used_at_unix_ms, system_time_millis(touched));
+        assert_eq!(reasoning.value, "thinking");
+    }
+
+    #[test]
+    fn sqlite_touch_turn_reasoning_last_used_updates_timestamp_without_rewriting_payload() {
+        let path = temp_db("touch-turn");
+        let store = SqliteStore::open(&path).expect("open sqlite");
+
+        let created = SystemTime::now();
+        store
+            .write_turn_reasoning("kimi", "42", created, created, 11, "turn-think")
+            .expect("write turn reasoning");
+
+        let touched = created + Duration::from_secs(60);
+        store
+            .touch_turn_reasoning_last_used(42, touched)
+            .expect("touch turn reasoning");
+
+        let turn = store
+            .read_turn_reasoning(42)
+            .expect("read turn reasoning")
+            .unwrap();
+        assert_eq!(turn.last_used_at_unix_ms, system_time_millis(touched));
+        assert_eq!(turn.value, "turn-think");
     }
 
     #[test]
