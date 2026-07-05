@@ -225,10 +225,85 @@
       padding: 0.375rem 0.875rem 0.75rem;
       font-size: 0.9375rem;
       line-height: 1.55;
-      white-space: pre-wrap;
       word-break: break-word;
     }
     .chat-bubble-body:last-child { padding-bottom: 0.875rem; }
+    .chat-markdown > :first-child { margin-top: 0; }
+    .chat-markdown > :last-child { margin-bottom: 0; }
+    .chat-markdown p { margin: 0 0 0.625rem; }
+    .chat-markdown h1,
+    .chat-markdown h2,
+    .chat-markdown h3,
+    .chat-markdown h4,
+    .chat-markdown h5,
+    .chat-markdown h6 {
+      margin: 0.75rem 0 0.375rem;
+      line-height: 1.3;
+      font-weight: 700;
+    }
+    .chat-markdown h1 { font-size: 1.25rem; }
+    .chat-markdown h2 { font-size: 1.125rem; }
+    .chat-markdown h3 { font-size: 1rem; }
+    .chat-markdown h4 { font-size: 0.9375rem; }
+    .chat-markdown ul,
+    .chat-markdown ol {
+      margin: 0.375rem 0 0.625rem;
+      padding-left: 1.25rem;
+    }
+    .chat-markdown li { margin: 0.125rem 0; }
+    .chat-markdown blockquote {
+      margin: 0.5rem 0;
+      padding: 0.25rem 0 0.25rem 0.75rem;
+      border-left: 3px solid var(--border);
+      color: var(--muted);
+    }
+    .chat-markdown hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 0.75rem 0;
+    }
+    .chat-markdown code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.8125em;
+      background: #0a0e14;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.1em 0.35em;
+    }
+    .chat-markdown pre {
+      margin: 0.5rem 0;
+      padding: 0.75rem;
+      background: #0a0e14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow-x: auto;
+    }
+    .chat-markdown pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: 0.8125rem;
+    }
+    .chat-markdown a {
+      color: var(--accent);
+      text-decoration: underline;
+    }
+    .chat-markdown table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.5rem 0;
+      font-size: 0.875rem;
+    }
+    .chat-markdown th,
+    .chat-markdown td {
+      border: 1px solid var(--border);
+      padding: 0.375rem 0.5rem;
+      text-align: left;
+    }
+    .chat-markdown th { background: #121821; }
+    .chat-markdown-plain {
+      white-space: pre-wrap;
+    }
     .chat-part {
       margin-bottom: 0.5rem;
     }
@@ -282,10 +357,7 @@
       padding: 0 0.75rem 0.75rem;
       font-size: 0.8125rem;
       color: #c9bddf;
-      white-space: pre-wrap;
-      word-break: break-word;
       line-height: 1.5;
-      font-style: italic;
     }
     .chat-tool-calls {
       margin: 0 0.875rem 0.75rem;
@@ -400,6 +472,8 @@
       <p class="sub"><a href="/metrics">Open metrics page</a> · <a href="/metrics?format=text">Raw text for scrapers</a></p>
     </section>
   </main>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/purify.min.js" crossorigin="anonymous"></script>
   <script>
     function fmtBytes(n) {
       if (n < 1024) return n + " B";
@@ -476,6 +550,49 @@
         .replace(/'/g, "&#039;");
     }
 
+    let markdownReady = false;
+
+    function initMarkdown() {
+      if (markdownReady) return;
+      if (typeof marked === "undefined" || typeof DOMPurify === "undefined") return;
+      marked.setOptions({ breaks: true, gfm: true });
+      DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+        if (node.tagName === "A") {
+          node.setAttribute("target", "_blank");
+          node.setAttribute("rel", "noopener noreferrer");
+        }
+        if (node.tagName === "IMG") {
+          const src = node.getAttribute("src") || "";
+          if (!/^(https?:|data:image\/)/i.test(src)) {
+            node.remove();
+          }
+        }
+      });
+      markdownReady = true;
+    }
+
+    function renderMarkdown(text) {
+      if (!text) return "";
+      initMarkdown();
+      if (!markdownReady) {
+        return `<div class="chat-markdown-plain">${escapeHtml(text)}</div>`;
+      }
+      const html = marked.parse(String(text));
+      return DOMPurify.sanitize(html, {
+        ALLOWED_TAGS: [
+          "p", "br", "strong", "em", "del", "code", "pre", "a", "ul", "ol", "li",
+          "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "hr", "table",
+          "thead", "tbody", "tr", "th", "td", "img",
+        ],
+        ALLOWED_ATTR: ["href", "target", "rel", "class", "src", "alt", "title"],
+      });
+    }
+
+    function renderMarkdownBlock(text) {
+      if (!text) return `<em class="sub">(empty)</em>`;
+      return `<div class="chat-markdown">${renderMarkdown(text)}</div>`;
+    }
+
     const ROLE_LABELS = {
       user: "User",
       assistant: "Assistant",
@@ -507,13 +624,13 @@
 
     function renderContentPart(part) {
       if (!part || typeof part !== "object") {
-        return `<div class="chat-part">${escapeHtml(String(part ?? ""))}</div>`;
+        return `<div class="chat-part">${renderMarkdownBlock(String(part ?? ""))}</div>`;
       }
       const kind = part.type || "unknown";
       if (kind === "text") {
         const text = part.text || "";
         return text
-          ? `<div class="chat-part">${escapeHtml(text)}</div>`
+          ? `<div class="chat-part">${renderMarkdownBlock(text)}</div>`
           : `<div class="chat-part sub"><em>(empty text part)</em></div>`;
       }
       if (kind === "image_url") {
@@ -540,7 +657,7 @@
       }
       if (typeof content === "string") {
         return content
-          ? `<div class="chat-bubble-body">${escapeHtml(content)}</div>`
+          ? `<div class="chat-bubble-body">${renderMarkdownBlock(content)}</div>`
           : `<div class="chat-bubble-body"><em class="sub">(empty)</em></div>`;
       }
       if (Array.isArray(content)) {
@@ -579,7 +696,7 @@
     function renderReasoning(text) {
       return `<details class="chat-reasoning">
         <summary>Reasoning</summary>
-        <div class="chat-reasoning-body">${escapeHtml(text)}</div>
+        <div class="chat-reasoning-body">${renderMarkdownBlock(text)}</div>
       </details>`;
     }
 
