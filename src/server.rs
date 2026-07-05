@@ -78,6 +78,7 @@ async fn run_serve(serve: ServeArgs, config_path: Option<PathBuf>) -> Result<()>
     let admin_enabled = admin_enabled(cfg.as_ref());
 
     let mut providers = HashMap::new();
+    let default_provider_slug = resolved.default_provider.as_str();
     for (slug, entry) in &resolved.providers {
         let kind = ProviderKind::from_route(slug).unwrap_or(ProviderKind::Custom);
         let slug_upper = slug.to_ascii_uppercase();
@@ -91,9 +92,15 @@ async fn run_serve(serve: ServeArgs, config_path: Option<PathBuf>) -> Result<()>
                     .filter(|u| !u.is_empty())
             })
             .or_else(|| {
-                std::env::var("UPSTREAM_BASE_URL")
-                    .ok()
-                    .filter(|u| !u.is_empty())
+                // UPSTREAM_BASE_URL is a legacy single-provider alias; do not apply it to
+                // every route when multiple providers are configured.
+                (slug == default_provider_slug)
+                    .then(|| {
+                        std::env::var("UPSTREAM_BASE_URL")
+                            .ok()
+                            .filter(|u| !u.is_empty())
+                    })
+                    .flatten()
             })
             .unwrap_or_else(|| kind.default_base_url().to_string());
         let upstream = validate_upstream_url(&base_url)?;

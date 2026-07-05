@@ -190,7 +190,11 @@ async fn handle_models_inner(state: AppState, provider: &str, headers: &HeaderMa
         false,
     );
     let models = serde_json::to_string(&list).unwrap();
-    info!(provider, "models={models}, key={}", api_key);
+    info!(
+        provider,
+        has_api_key = !api_key.is_empty(),
+        "models={models}"
+    );
     response
 }
 
