@@ -24,7 +24,7 @@ Legacy `/v1/*` routes still work and map to `default_provider`.
 - **Streaming** — real-time Chat SSE → Responses SSE conversion
 - **Session persistence** — SQLite-backed history keyed by `response_id` for `previous_response_id` continuity
 - **Optional cache & rate limiting** — moka response cache, global RPS limit
-- **Codex config generator** — `setup` / `print-codex-config` output ready-to-paste Codex snippets
+- **Codex config generator** — `crabridge-cli setup` / `print-codex-config` output ready-to-paste Codex snippets
 
 ## Requirements
 
@@ -38,7 +38,7 @@ Legacy `/v1/*` routes still work and map to `default_provider`.
 ```bash
 export DEEPSEEK_API_KEY=sk-...
 cp crabbridge.example.toml crabbridge.toml
-cargo run -- serve
+cargo run --bin crabridge -- serve
 ```
 
 ### Multi-provider (recommended)
@@ -46,8 +46,8 @@ cargo run -- serve
 ```bash
 export DEEPSEEK_API_KEY=sk-...
 export KIMI_API_KEY=sk-...
-cargo run -- setup --all-providers   # writes Codex config + crabbridge.toml with both routes
-cargo run -- serve
+cargo run --bin crabridge-cli -- setup --all-providers   # writes Codex config + crabbridge.toml with both routes
+cargo run --bin crabridge -- serve
 ```
 
 `setup --all-providers` writes a TOML with both `[providers.deepseek]` and `[providers.kimi]` sections. If you hand-edit `crabbridge.toml`, include a section for **each** provider you want enabled — a file with only `[providers.deepseek]` serves DeepSeek alone.
@@ -58,16 +58,16 @@ With **no** config file at all, `serve` defaults to both built-in providers (`de
 
 ```bash
 export KIMI_API_KEY=sk-...
-cargo run -- setup --provider kimi
-cargo run -- serve
+cargo run --bin crabridge-cli -- setup --provider kimi
+cargo run --bin crabridge -- serve
 ```
 
 In another terminal:
 
 ```bash
-cargo run -- prompt "Hello"
-cargo run -- prompt "Hello" --provider kimi
-cargo run -- setup --docker   # check configuration
+cargo run --bin crabridge -- prompt "Hello"
+cargo run --bin crabridge -- prompt "Hello" --provider kimi
+cargo run --bin crabridge-cli -- setup --docker   # check configuration
 ```
 
 ## Installation
@@ -84,8 +84,8 @@ Install scripts build a release binary and set up a config directory.
 
 | Platform | Binary | Config |
 |----------|--------|--------|
-| macOS / Linux | `~/.local/bin/crabridge` | `~/.config/crabbridge/config.toml` |
-| Windows | `%LOCALAPPDATA%\crabbridge\bin\crabridge.exe` | `%APPDATA%\crabbridge\config.toml` |
+| macOS / Linux | `~/.local/bin/crabridge`, `~/.local/bin/crabridge-cli` | `~/.config/crabbridge/config.toml` |
+| Windows | `%LOCALAPPDATA%\crabbridge\bin\crabridge.exe`, `crabridge-cli.exe` | `%APPDATA%\crabbridge\config.toml` |
 
 **Examples**
 
@@ -122,10 +122,10 @@ $env:DEEPSEEK_API_KEY = "sk-xxx"
 3. Generate Codex provider snippets (writes `~/.codex/crabbridge-models-{provider}.json`):
 
    ```bash
-   crabridge setup --all-providers
+   crabridge-cli setup --all-providers
    # or one at a time
-   crabridge print-codex-config --provider deepseek
-   crabridge print-codex-config --provider kimi
+   crabridge-cli print-codex-config --provider deepseek
+   crabridge-cli print-codex-config --provider kimi
    ```
 
 4. Paste into `~/.codex/config.toml`. Multi-provider form:
@@ -161,10 +161,10 @@ $env:DEEPSEEK_API_KEY = "sk-xxx"
 
 ```bash
 crabridge serve --config ~/.config/crabbridge/config.toml
-crabridge -c crabbridge.toml setup --all-providers
+crabridge-cli -c crabbridge.toml setup --all-providers
 ```
 
-The config file is loaded **before** the CLI subcommand runs (`explicit_config_before_cli`), then all commands share the same resolved path after Clap parsing.
+The config file is loaded **before** the CLI subcommand runs (`explicit_config_before_cli`). Both `crabridge` and `crabridge-cli` share the same config resolution and global `-c` / `--config` flag.
 
 **Priority:** CLI flags > environment variables > TOML file > built-in defaults.
 
@@ -220,16 +220,26 @@ Upstream URLs default from the provider slug (`deepseek` → DeepSeek API, `kimi
 
 ## CLI
 
+Two binaries are built from this repo:
+
+| Binary | Purpose |
+|--------|---------|
+| `crabridge` | Run the HTTP bridge server and send test prompts |
+| `crabridge-cli` | Generate Codex config snippets and write setup files |
+
 ```bash
+# Server (crabridge)
 crabridge serve                                # Start the bridge server
 crabridge serve --config crabbridge.toml       # Explicit config path
-crabridge setup                                # Write Codex + crabbridge.toml
-crabridge setup --all-providers                # Configure deepseek + kimi at once
-crabridge setup --providers=kimi,deepseek      # Pick providers explicitly
-crabridge setup --docker                       # Check current configuration
 crabridge prompt "Hello"                       # Send a test request (uses env key)
 crabridge prompt "Hello" --provider kimi
-crabridge print-codex-config --all-providers
+
+# Setup & Codex snippets (crabridge-cli)
+crabridge-cli setup                            # Write Codex + crabbridge.toml
+crabridge-cli setup --all-providers            # Configure deepseek + kimi at once
+crabridge-cli setup --providers=kimi,deepseek  # Pick providers explicitly
+crabridge-cli setup --docker                   # Check current configuration
+crabridge-cli print-codex-config --all-providers
 ```
 
 ## API Endpoints
@@ -249,7 +259,9 @@ All upstream-bound requests require `Authorization: Bearer <api_key>`. `/v1/chat
 ## Development
 
 ```bash
-cargo build --release
+cargo build --release --bins                              # both binaries (server feature enabled)
+cargo build --release --bin crabridge                     # HTTP bridge only
+cargo build --release --bin crabridge-cli --no-default-features  # slim CLI (no axum/sqlite/moka)
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
@@ -260,17 +272,25 @@ For architecture details and module design, see [AGENT_SPEC.md](AGENT_SPEC.md).
 
 ```
 src/
-├── app.rs            # Router construction
-├── admin.rs          # /admin dashboard + /metrics
-├── metrics.rs        # Runtime counters + Prometheus export
-├── handlers.rs       # HTTP routes
-├── translate.rs      # Responses ↔ Chat conversion
-├── stream.rs         # Streaming SSE translation
-├── session.rs        # Session store
-├── session_sqlite.rs # SQLite persistence
-├── config.rs         # TOML load + provider resolution
-├── provider.rs       # DeepSeek / Kimi presets
-├── setup.rs          # setup + setup --docker
+├── main.rs              # crabridge entry (thin)
+├── bin/
+│   └── crabridge-cli.rs # crabridge-cli entry (thin)
+├── runtime.rs           # shared init + Tokio block_on
+├── cli.rs               # setup / print-codex-config handlers
+├── server.rs            # serve / prompt handlers (feature: server)
+├── cli_opts.rs          # Clap for crabridge-cli
+├── opts.rs              # Clap for crabridge (feature: server)
+├── app.rs               # Router construction
+├── admin.rs             # /admin dashboard + /metrics
+├── metrics.rs           # Runtime counters + Prometheus export
+├── handlers.rs          # HTTP routes
+├── translate.rs         # Responses ↔ Chat conversion
+├── stream.rs            # Streaming SSE translation
+├── session.rs           # Session store
+├── session_sqlite.rs    # SQLite persistence
+├── config.rs            # TOML load + provider resolution
+├── provider.rs          # DeepSeek / Kimi presets
+├── setup.rs             # setup + setup --docker
 └── ...
 scripts/
 ├── install-macos.sh

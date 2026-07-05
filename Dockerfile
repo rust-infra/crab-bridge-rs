@@ -2,11 +2,13 @@ FROM rust:bookworm AS builder
 
 WORKDIR /app
 
+# Use China crates.io mirror (see .cargo/config.toml).
+COPY .cargo/config.toml .cargo/config.toml
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY static ./static
 
-RUN cargo build --release
+RUN cargo build --release --bin crabridge
 
 FROM debian:bookworm-slim AS runtime
 

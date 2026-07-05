@@ -65,10 +65,16 @@ crab-bridge-rs/
 ├── .gitignore
 ├── AGENT_SPEC.md
 ├── src/
-│   ├── main.rs              # Entry: serve / prompt / setup / print-codex-config
-│   ├── lib.rs               # Module exports
+│   ├── main.rs              # crabridge entry (thin)
+│   ├── bin/
+│   │   └── crabridge-cli.rs # crabridge-cli entry (thin)
+│   ├── runtime.rs           # shared init + Tokio block_on
+│   ├── cli.rs               # setup / print-codex-config handlers
+│   ├── server.rs            # serve / prompt handlers
+│   ├── lib.rs               # Module exports (server modules behind `feature = "server"`)
 │   ├── app.rs               # build_router()
-│   ├── opts.rs              # Clap CLI (ServeArgs, SetupArgs, global --config)
+│   ├── opts.rs              # Clap for crabridge (BridgeCli)
+│   ├── cli_opts.rs          # Clap for crabridge-cli (CrabridgeCli)
 │   ├── config.rs            # crabbridge.toml load + provider resolution
 │   ├── provider.rs          # DeepSeek / Kimi presets, route slugs, model matching
 │   ├── setup.rs             # setup + setup --docker config checks
@@ -92,19 +98,24 @@ crab-bridge-rs/
 
 ## 4. Module Design
 
-### 4.1 `src/opts.rs`
+### 4.1 CLI binaries
 
-**Subcommands**:
+**`crabridge`** (`src/opts.rs`):
 
 | Subcommand | Description |
 |------------|-------------|
 | `serve` | Start the HTTP bridge server (`ServeArgs`) |
 | `prompt` | Send a test request to `/{provider}/v1/responses` |
+
+**`crabridge-cli`** (`src/cli_opts.rs`):
+
+| Subcommand | Description |
+|------------|-------------|
 | `setup` | Write Codex config + optional `crabbridge.toml` |
 | `setup --docker` | Read-only configuration check |
 | `print-codex-config` | Print Codex `config.toml` snippet(s) |
 
-**Global flags**: `-c` / `--config PATH` (also `CRABRIDGE_CONFIG`).
+**Global flags** (both binaries): `-c` / `--config PATH` (also `CRABRIDGE_CONFIG`).
 
 **Setup flags**: `--provider deepseek\|kimi`, `--all-providers`, `--providers=kimi,deepseek`.
 
@@ -219,6 +230,8 @@ No schema migration code — greenfield `init_schema()` on open.
 
 ### 4.7 `src/setup.rs`
 
+Invoked by **`crabridge-cli setup`**:
+
 - `setup --all-providers`: writes both Codex entries + multi-provider `crabbridge.toml` (empty `[providers.*]` stubs)
 - `setup --providers=kimi,deepseek`: same, explicit slug list
 - `setup --provider kimi`: single provider only
@@ -327,14 +340,17 @@ Empty string env values are treated as unset where applicable.
 ## 7. CLI
 
 ```bash
+# crabridge — server
 crabridge serve
 crabridge serve --config crabbridge.toml
-crabridge setup --all-providers
-crabridge setup --providers=kimi,deepseek
-crabridge setup --docker
 crabridge prompt "Hello" --provider deepseek
-crabridge print-codex-config --provider kimi
-crabridge print-codex-config --all-providers
+
+# crabridge-cli — Codex setup
+crabridge-cli setup --all-providers
+crabridge-cli setup --providers=kimi,deepseek
+crabridge-cli setup --docker
+crabridge-cli print-codex-config --provider kimi
+crabridge-cli print-codex-config --all-providers
 ```
 
 ---

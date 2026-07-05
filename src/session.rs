@@ -349,7 +349,7 @@ impl SessionState {
                 last_used_at_unix_ms: system_time_millis(entry.last_used_at),
             })
             .collect();
-        recent.sort_by(|a, b| b.last_used_at_unix_ms.cmp(&a.last_used_at_unix_ms));
+        recent.sort_by_key(|b| std::cmp::Reverse(b.last_used_at_unix_ms));
         recent.truncate(RECENT_SESSIONS_LIMIT);
 
         SessionStats {

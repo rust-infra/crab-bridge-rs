@@ -57,7 +57,7 @@ pub struct SetupCheckOptions {
     pub bind_addr: SocketAddr,
 }
 
-/// Result of `crabridge setup`.
+/// Result of `crabridge-cli setup`.
 #[derive(Debug, Clone)]
 pub struct SetupResult {
     pub provider: ProviderKind,
@@ -359,7 +359,7 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
             &mut checks,
             "model_provider",
             CheckStatus::Warn,
-            format!("legacy \"{LEGACY_PROVIDER_NAME}\" — run `crabridge setup` to migrate"),
+            format!("legacy \"{LEGACY_PROVIDER_NAME}\" — run `crabridge-cli setup` to migrate"),
         ),
         Some(other) => push_check(
             &mut checks,
@@ -371,7 +371,7 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
             &mut checks,
             "model_provider",
             CheckStatus::Fail,
-            "not set — run `crabridge setup`".into(),
+            "not set — run `crabridge-cli setup`".into(),
         ),
     }
 
@@ -524,7 +524,7 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
                     &mut checks,
                     &format!("[{slug}] model_providers.{codex_name}"),
                     CheckStatus::Fail,
-                    format!("section missing — run `crabridge setup --provider {slug}`"),
+                    format!("section missing — run `crabridge-cli setup --provider {slug}`"),
                 );
             }
         }
@@ -621,7 +621,7 @@ fn check_bridge_config_file(checks: &mut Vec<ConfigCheck>, path: &Path) {
             "bridge config",
             CheckStatus::Warn,
             format!(
-                "{} not found (optional — run `crabridge setup` to generate)",
+                "{} not found (optional — run `crabridge-cli setup` to generate)",
                 path.display()
             ),
         );
@@ -804,7 +804,7 @@ pub fn print_setup_check(report: &SetupCheckReport) {
 
     println!();
     if report.has_failures() {
-        println!("Result: FAILED — fix the items above, then run `crabridge setup` if needed.");
+        println!("Result: FAILED — fix the items above, then run `crabridge-cli setup` if needed.");
     } else if report.has_warnings() {
         println!("Result: OK with warnings.");
     } else {
@@ -812,7 +812,7 @@ pub fn print_setup_check(report: &SetupCheckReport) {
     }
     println!();
     if report.has_failures() {
-        println!("Quick fix: crabridge setup --provider deepseek   # or --providers kimi,deepseek");
+        println!("Quick fix: crabridge-cli setup --provider deepseek   # or --providers kimi,deepseek");
     }
     println!();
 }

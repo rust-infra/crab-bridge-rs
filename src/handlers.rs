@@ -8,13 +8,12 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use reqwest::Url;
 use serde_json::json;
 use tracing::{debug, error, info, warn};
 
 use crate::cache::ResponseCache;
 use crate::metrics::BridgeMetrics;
-use crate::provider::{ProviderKind, apply_upstream_headers};
+use crate::provider::{ProviderKind, apply_upstream_headers, join_upstream_base};
 use crate::state::{AppState, ProviderRuntime};
 use crate::stream::{self, StreamArgs};
 use crate::translate;
@@ -56,15 +55,6 @@ fn bearer_token_from_headers(headers: &HeaderMap) -> Option<String> {
 /// Bearer token from Codex (`env_key` → `Authorization: Bearer …`).
 fn upstream_api_key(headers: &HeaderMap) -> Option<Arc<String>> {
     bearer_token_from_headers(headers).map(Arc::new)
-}
-
-pub fn join_base(url: &Url) -> String {
-    let s = url.as_str();
-    if s.ends_with('/') {
-        s.to_string()
-    } else {
-        format!("{s}/")
-    }
 }
 
 pub async fn health() -> impl IntoResponse {
@@ -127,7 +117,7 @@ async fn handle_models_inner(state: AppState, provider: &str, headers: &HeaderMa
     info!(provider, "GET /{provider}/v1/models");
     let kind = ProviderKind::from_route(provider).unwrap_or(ProviderKind::Custom);
     let api_key = upstream_api_key(headers).unwrap_or_default();
-    let url = format!("{}models", join_base(&runtime.upstream));
+    let url = format!("{}models", join_upstream_base(&runtime.upstream));
     let builder = apply_upstream_headers(state.client.get(&url), kind, api_key.as_str());
 
     let upstream_body: Option<serde_json::Value> = match builder.send().await {
@@ -199,6 +189,8 @@ async fn handle_models_inner(state: AppState, provider: &str, headers: &HeaderMa
         started,
         false,
     );
+    let models = serde_json::to_string(&list).unwrap();
+    info!(provider, "models={models}, key={}", api_key);
     response
 }
 
@@ -260,8 +252,7 @@ async fn handle_responses_for_provider(
                 String::from_utf8_lossy(&body[..body.len().min(200)])
             );
             return {
-                let response =
-                    (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response();
+                let response = (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response();
                 record_http_outcome(
                     &state.metrics,
                     provider,
@@ -344,7 +335,7 @@ async fn handle_responses_inner(
         "→ upstream tools={}",
         summarize_debug_names(chat_tool_debug_names(&chat_req.tools))
     );
-    let url = format!("{}chat/completions", join_base(&runtime.upstream));
+    let url = format!("{}chat/completions", join_upstream_base(&runtime.upstream));
     let Some(api_key) = upstream_api_key(headers) else {
         let response = (
             StatusCode::UNAUTHORIZED,
@@ -381,7 +372,7 @@ async fn handle_responses_inner(
             started,
             metrics: state.metrics.clone(),
         };
-        let response = match stream::prepare_upstream(&args).await {
+        match stream::prepare_upstream(&args).await {
             Ok(upstream) => {
                 record_http_outcome(
                     &state.metrics,
@@ -423,8 +414,7 @@ async fn handle_responses_inner(
                 record_http_outcome(&state.metrics, provider, "responses", status, started, true);
                 response
             }
-        };
-        return response;
+        }
     } else {
         chat_req.stream = false;
         let metrics = state.metrics.clone();
@@ -440,14 +430,7 @@ async fn handle_responses_inner(
         })
         .await;
         let status = response.status();
-        record_http_outcome(
-            &metrics,
-            provider,
-            "responses",
-            status,
-            started,
-            false,
-        );
+        record_http_outcome(&metrics, provider, "responses", status, started, false);
         response
     }
 }

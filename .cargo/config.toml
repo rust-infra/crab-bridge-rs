@@ -1,0 +1,14 @@
+# China mirror for faster crates.io downloads (Docker builds and local dev in CN).
+# https://rsproxy.cn/
+
+[source.crates-io]
+replace-with = "rsproxy-sparse"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[registries.rsproxy]
+index = "sparse+https://rsproxy.cn/index/"
+
+[net]
+git-fetch-with-cli = true

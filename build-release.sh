@@ -4,7 +4,8 @@ set -euo pipefail
 # 独立跨平台打包脚本：支持 macOS / Linux / Windows
 # 依赖：Rust、rustup、cargo-zigbuild（脚本会自动提示安装）
 
-BIN_NAME="crabridge"
+SERVER_BIN="crabridge"
+CLI_BIN="crabridge-cli"
 DIST_DIR="dist"
 
 # 目标平台列表（target, 压缩包名后缀）
@@ -54,22 +55,20 @@ ensure_target() {
   fi
 }
 
-# 构建单个目标
-build_target() {
+# 构建并打包单个二进制
+package_binary() {
   local target="$1"
   local suffix="$2"
-
-  log_info "开始构建: ${target}"
-
-  cargo zigbuild --release --target "${target}"
+  local bin_name="$3"
+  local no_default_features="${4:-0}"
 
   local src_dir="target/${target}/release"
-  local exe_name="${BIN_NAME}"
-  local out_name="${BIN_NAME}-${suffix}"
+  local exe_name="${bin_name}"
+  local out_name="${bin_name}-${suffix}"
 
   if [[ "${target}" == *"windows"* ]]; then
-    exe_name="${BIN_NAME}.exe"
-    out_name="${BIN_NAME}-${suffix}.exe"
+    exe_name="${bin_name}.exe"
+    out_name="${bin_name}-${suffix}.exe"
   fi
 
   local src_path="${src_dir}/${exe_name}"
@@ -78,19 +77,14 @@ build_target() {
     exit 1
   fi
 
-  # 创建输出目录
   mkdir -p "${DIST_DIR}"
-
-  # 复制产物到 dist
   cp "${src_path}" "${DIST_DIR}/${out_name}"
 
-  # 非 Windows 二进制 strip 减小体积
   if [[ "${target}" != *"windows"* ]]; then
     strip "${DIST_DIR}/${out_name}" || log_warn "strip 失败，跳过"
   fi
 
-  # 打包
-  local pkg_name="${BIN_NAME}-${suffix}"
+  local pkg_name="${bin_name}-${suffix}"
   if [[ "${target}" == *"windows"* ]]; then
     (cd "${DIST_DIR}" && zip "${pkg_name}.zip" "${out_name}" >/dev/null)
     log_info "已生成: ${DIST_DIR}/${pkg_name}.zip"
@@ -100,9 +94,24 @@ build_target() {
   fi
 }
 
+# 构建单个目标
+build_target() {
+  local target="$1"
+  local suffix="$2"
+
+  log_info "开始构建: ${target}"
+
+  cargo zigbuild --release --target "${target}" --bin "${SERVER_BIN}"
+  package_binary "${target}" "${suffix}" "${SERVER_BIN}"
+
+  cargo zigbuild --release --target "${target}" --bin "${CLI_BIN}" --no-default-features
+  package_binary "${target}" "${suffix}" "${CLI_BIN}" 1
+}
+
 main() {
   log_info "跨平台独立二进制打包脚本"
   log_info "目标平台: Linux(x64/arm64), macOS(x64/arm64), Windows(x64)"
+  log_info "产物: ${SERVER_BIN} (server) + ${CLI_BIN} (cli, slim)"
 
   ensure_cargo_zigbuild
 

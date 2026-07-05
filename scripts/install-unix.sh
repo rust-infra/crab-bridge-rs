@@ -6,6 +6,7 @@ OS_NAME="${1:?OS name required (macos|linux)}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BINARY_NAME="crabridge"
+CLI_BINARY_NAME="crabridge-cli"
 
 PREFIX="${PREFIX:-${HOME}/.local}"
 BIN_DIR="${PREFIX}/bin"
@@ -95,20 +96,25 @@ ensure_cargo() {
 build_binary() {
     [[ -f "${BUILD_DIR}/Cargo.toml" ]] || die "No Cargo.toml in BUILD_DIR=${BUILD_DIR}"
 
-    log "Building release binary in ${BUILD_DIR}"
+    log "Building release binaries in ${BUILD_DIR}"
     (
         cd "${BUILD_DIR}"
-        cargo build --release
+        cargo build --release --bin "${BINARY_NAME}"
+        cargo build --release --bin "${CLI_BINARY_NAME}" --no-default-features
     )
 }
 
 install_binary() {
     local src="${BUILD_DIR}/target/release/${BINARY_NAME}"
+    local cli_src="${BUILD_DIR}/target/release/${CLI_BINARY_NAME}"
     [[ -f "${src}" ]] || die "Binary not found at ${src}. Run build first."
+    [[ -f "${cli_src}" ]] || die "Binary not found at ${cli_src}. Run build first."
 
     mkdir -p "${BIN_DIR}"
     install -m 755 "${src}" "${BIN_DIR}/${BINARY_NAME}"
+    install -m 755 "${cli_src}" "${BIN_DIR}/${CLI_BINARY_NAME}"
     log "Installed ${BIN_DIR}/${BINARY_NAME}"
+    log "Installed ${BIN_DIR}/${CLI_BINARY_NAME}"
 }
 
 install_config() {
@@ -180,6 +186,7 @@ print_next_steps() {
 CrabBridge installed successfully.
 
   Binary:  ${BIN_DIR}/${BINARY_NAME}
+           ${BIN_DIR}/${CLI_BINARY_NAME}
   Config:  ${CONFIG_DIR}/config.toml
 
 Next steps:
@@ -187,7 +194,7 @@ Next steps:
   2. Start the bridge:
        ${BIN_DIR}/${BINARY_NAME} serve
   3. Configure Codex:
-       ${BIN_DIR}/${BINARY_NAME} setup
+       ${BIN_DIR}/${CLI_BINARY_NAME} setup
   4. Test:
        ${BIN_DIR}/${BINARY_NAME} prompt "Hello"
 EOF
