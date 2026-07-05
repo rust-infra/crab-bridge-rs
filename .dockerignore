@@ -1,0 +1,11 @@
+target/
+dist/
+.git/
+.gitignore
+.idea/
+.vscode/
+data/
+crabbridge.toml
+.env
+*.md
+AGENT_SPEC.md

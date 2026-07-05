@@ -1,0 +1,27 @@
+services:
+  crabbridge:
+    build: .
+    image: crabbridge:local
+    container_name: crabbridge
+    restart: unless-stopped
+    ports:
+      - "${CRABRIDGE_PORT:-11435}:11435"
+    volumes:
+      - ./docker/crabbridge.toml:/etc/crabbridge/crabbridge.toml:ro
+      - crabbridge-data:/app/data
+    environment:
+      CRABRIDGE_CONFIG: /etc/crabbridge/crabbridge.toml
+      BRIDGE_ADDR: 0.0.0.0:11435
+      SESSION_DB: /app/data/crabbridge.db
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:11435/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  crabbridge-data:
