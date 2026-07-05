@@ -5,8 +5,16 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use moka::future::Cache;
+use serde::Serialize;
 use serde_json::Value;
 use tracing::debug;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CacheStats {
+    pub enabled: bool,
+    pub entry_count: u64,
+    pub weighted_size_bytes: u64,
+}
 
 #[derive(Clone)]
 pub struct ResponseCache {
@@ -40,6 +48,14 @@ impl ResponseCache {
     pub async fn insert(&self, key: String, value: Bytes) {
         debug!(cache_key = %key, bytes = value.len(), "cached chat completion response");
         self.inner.insert(key, value).await;
+    }
+
+    pub fn stats(&self) -> CacheStats {
+        CacheStats {
+            enabled: true,
+            entry_count: self.inner.entry_count(),
+            weighted_size_bytes: self.inner.weighted_size(),
+        }
     }
 }
 

@@ -1,8 +1,9 @@
 //! Upstream provider presets (DeepSeek, Kimi/Moonshot, custom).
 
-use std::env;
+use std::{env, fmt::Display};
 
 use reqwest::RequestBuilder;
+use tracing::warn;
 
 /// User-Agent accepted by the Kimi Code API for upstream requests.
 pub const KIMI_UPSTREAM_USER_AGENT: &str = "Claude Code";
@@ -12,6 +13,12 @@ pub enum ProviderKind {
     DeepSeek,
     Kimi,
     Custom,
+}
+
+impl Display for ProviderKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.route_slug())
+    }
 }
 
 impl ProviderKind {
@@ -258,6 +265,8 @@ pub fn apply_upstream_headers(
     let mut builder = builder;
     if !api_key.is_empty() {
         builder = builder.bearer_auth(api_key);
+    } else {
+        warn!("apk key is empty, provider={kind}");
     }
     if let Some(ua) = kind.upstream_user_agent() {
         builder = builder.header(reqwest::header::USER_AGENT, ua);
