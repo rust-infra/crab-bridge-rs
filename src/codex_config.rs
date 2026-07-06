@@ -6,8 +6,7 @@ use std::net::SocketAddr;
 use reqwest::{Client, Url};
 use serde_json::{Value, json};
 
-use crate::handlers::join_base;
-use crate::provider::{ProviderKind, apply_upstream_headers};
+use crate::provider::{ProviderKind, apply_upstream_headers, join_upstream_base};
 
 pub struct ModelProps {
     pub context_window: u32,
@@ -110,7 +109,7 @@ pub async fn prepare_model_catalog(
     kind: ProviderKind,
     default_model: &str,
 ) -> Vec<String> {
-    let url = format!("{}models", join_base(upstream));
+    let url = format!("{}models", join_upstream_base(upstream));
     let builder = apply_upstream_headers(client.get(&url), kind, api_key);
 
     let mut models: Vec<String> = match builder.send().await {

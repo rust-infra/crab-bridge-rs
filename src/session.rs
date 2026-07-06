@@ -37,6 +37,15 @@ pub struct SessionStats {
     pub recent_sessions: Vec<SessionSummary>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionDetail {
+    pub response_id: String,
+    pub provider: String,
+    pub bytes: usize,
+    pub last_used_at_unix_ms: u128,
+    pub messages: Vec<ChatMessage>,
+}
+
 /// Maps response_id → accumulated message history for that session.
 /// Codex uses `previous_response_id` to continue a conversation; we maintain
 /// the full messages[] here so each Chat Completions call is self-contained.
@@ -292,6 +301,25 @@ impl SessionStore {
         let state = self.state.lock().expect("session store mutex poisoned");
         state.snapshot_stats()
     }
+
+    /// Retrieve full session detail for the admin dashboard, or `None` if unknown.
+    pub fn get_session(&self, response_id: &str) -> Option<SessionDetail> {
+        let mut state = self.state.lock().expect("session store mutex poisoned");
+        if !state.sessions.contains_key(response_id) {
+            return None;
+        }
+        let messages = state.load_session_messages(response_id);
+        state.touch_session(response_id);
+        state.enforce_limits();
+        let entry = state.sessions.get(response_id)?;
+        Some(SessionDetail {
+            response_id: response_id.to_string(),
+            provider: entry.provider.clone(),
+            bytes: entry.bytes,
+            last_used_at_unix_ms: system_time_millis(entry.last_used_at),
+            messages,
+        })
+    }
 }
 
 impl Default for SessionStore {
@@ -317,7 +345,7 @@ impl SessionState {
                 last_used_at_unix_ms: system_time_millis(entry.last_used_at),
             })
             .collect();
-        recent.sort_by(|a, b| b.last_used_at_unix_ms.cmp(&a.last_used_at_unix_ms));
+        recent.sort_by_key(|b| std::cmp::Reverse(b.last_used_at_unix_ms));
         recent.truncate(RECENT_SESSIONS_LIMIT);
 
         SessionStats {
@@ -607,12 +635,9 @@ impl SessionState {
             entry.last_used_at = now;
         }
         if let Some(sqlite) = &self.sqlite
-            && let Some(mut record) = sqlite.read_session(id).ok().flatten()
+            && let Err(e) = sqlite.touch_session_last_used(id, now)
         {
-            record.last_used_at_unix_ms = system_time_millis(now);
-            if let Err(e) = sqlite.write_session_record(&record) {
-                warn!("failed to touch sqlite session {id}: {e}");
-            }
+            warn!("failed to touch sqlite session {id}: {e}");
         }
         self.session_order.retain(|existing| existing != id);
         self.session_order.push_back(id.to_string());
@@ -624,12 +649,9 @@ impl SessionState {
             entry.last_used_at = now;
         }
         if let Some(sqlite) = &self.sqlite
-            && let Some(mut record) = sqlite.read_reasoning(call_id).ok().flatten()
+            && let Err(e) = sqlite.touch_reasoning_last_used(call_id, now)
         {
-            record.last_used_at_unix_ms = system_time_millis(now);
-            if let Err(e) = sqlite.write_reasoning_record(&record) {
-                warn!("failed to touch sqlite reasoning {call_id}: {e}");
-            }
+            warn!("failed to touch sqlite reasoning {call_id}: {e}");
         }
         self.reasoning_order.retain(|existing| existing != call_id);
         self.reasoning_order.push_back(call_id.to_string());
@@ -641,12 +663,9 @@ impl SessionState {
             entry.last_used_at = now;
         }
         if let Some(sqlite) = &self.sqlite
-            && let Some(mut record) = sqlite.read_turn_reasoning(hash).ok().flatten()
+            && let Err(e) = sqlite.touch_turn_reasoning_last_used(hash, now)
         {
-            record.last_used_at_unix_ms = system_time_millis(now);
-            if let Err(e) = sqlite.write_turn_reasoning_record(&record) {
-                warn!("failed to touch sqlite turn reasoning {hash}: {e}");
-            }
+            warn!("failed to touch sqlite turn reasoning {hash}: {e}");
         }
         self.turn_reasoning_order
             .retain(|existing| existing != &hash);
@@ -1036,5 +1055,84 @@ mod tests {
 
         assert!(store.get_history(&id1).is_empty());
         assert_eq!(store.get_history(&id2).len(), 1);
+    }
+
+    #[test]
+    fn test_get_session_returns_detail_and_messages() {
+        let store = SessionStore::new();
+        let id = store.save(
+            TEST_PROVIDER,
+            vec![msg("user", Some("hi")), msg("assistant", Some("hey"))],
+        );
+        let detail = store.get_session(&id).expect("session exists");
+        assert_eq!(detail.response_id, id);
+        assert_eq!(detail.provider, TEST_PROVIDER);
+        assert_eq!(detail.messages.len(), 2);
+        assert_eq!(detail.messages[0].text_content(), "hi");
+        assert_eq!(detail.messages[1].text_content(), "hey");
+    }
+
+    #[test]
+    fn test_get_session_returns_touched_last_used_at() {
+        let store = SessionStore::new();
+        let id = store.save(TEST_PROVIDER, vec![msg("user", Some("hi"))]);
+        {
+            let mut state = store.state.lock().unwrap();
+            state.sessions.get_mut(&id).unwrap().last_used_at =
+                SystemTime::now() - Duration::from_secs(3600);
+        }
+
+        let stale_ms = system_time_millis(SystemTime::now() - Duration::from_secs(3590));
+        let detail = store.get_session(&id).expect("session exists");
+        assert!(detail.last_used_at_unix_ms > stale_ms);
+    }
+
+    #[test]
+    fn test_sqlite_touch_last_used_persists_across_restart() {
+        let db = temp_db("touch-restart");
+        let id = {
+            let store = SessionStore::with_sqlite_limits_and_ttl(
+                &db,
+                10,
+                1024,
+                Duration::from_secs(86_400),
+            )
+            .unwrap();
+            store.save(TEST_PROVIDER, vec![msg("user", Some("hi"))])
+        };
+
+        let stale = SystemTime::now() - Duration::from_secs(3600);
+        {
+            let sqlite = SqliteStore::open(&db).unwrap();
+            sqlite
+                .touch_session_last_used(&id, stale)
+                .expect("seed stale timestamp");
+        }
+        let stale_ms = system_time_millis(stale);
+
+        {
+            let store = SessionStore::with_sqlite_limits_and_ttl(
+                &db,
+                10,
+                1024,
+                Duration::from_secs(86_400),
+            )
+            .unwrap();
+            assert_eq!(store.get_history(&id).len(), 1);
+        }
+
+        let touched_ms = SqliteStore::open(&db)
+            .unwrap()
+            .read_session(&id)
+            .expect("read session")
+            .expect("session exists")
+            .last_used_at_unix_ms;
+        assert!(touched_ms > stale_ms);
+    }
+
+    #[test]
+    fn test_get_session_missing_returns_none() {
+        let store = SessionStore::new();
+        assert!(store.get_session("resp_nonexistent").is_none());
     }
 }

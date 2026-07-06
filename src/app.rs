@@ -1,12 +1,8 @@
 //! Axum router wiring shared by the binary and integration tests.
 
-use axum::{
-    Router,
-    extract::DefaultBodyLimit,
-    routing::get,
-};
+use axum::{Router, extract::DefaultBodyLimit, routing::get};
 
-use crate::admin::{dashboard_page, overview, prometheus_metrics};
+use crate::admin::{dashboard_page, overview, prometheus_metrics, session_detail};
 use crate::handlers::{api_root, handle_fallback, handle_models, handle_responses, health};
 use crate::state::AppState;
 
@@ -18,13 +14,17 @@ pub fn build_router(state: AppState, admin_enabled: bool) -> Router {
         .route("/v1/responses", axum::routing::post(handle_responses))
         .route("/v1/models", get(handle_models))
         .route("/{provider}/v1", get(api_root))
-        .route("/{provider}/v1/responses", axum::routing::post(handle_responses))
+        .route(
+            "/{provider}/v1/responses",
+            axum::routing::post(handle_responses),
+        )
         .route("/{provider}/v1/models", get(handle_models));
 
     if admin_enabled {
         router = router
             .route("/admin", get(dashboard_page))
             .route("/admin/api/overview", get(overview))
+            .route("/admin/api/sessions/{response_id}", get(session_detail))
             .route("/metrics", get(prometheus_metrics));
     }
 

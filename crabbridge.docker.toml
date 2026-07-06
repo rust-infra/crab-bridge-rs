@@ -1,0 +1,32 @@
+# CrabBridge Docker configuration
+# Baked into the image at /etc/crabbridge/crabbridge.toml
+# Override by mounting your own file at that path in docker-compose.yml
+#
+# API keys come from Codex requests (env vars on the host), not this file.
+
+default_provider = "deepseek"
+
+[providers.deepseek]
+# base_url = "https://api.deepseek.com/v1"
+
+[providers.kimi]
+# base_url = "https://api.kimi.com/coding/v1"
+
+[server]
+bind_addr = "0.0.0.0:11435"
+log_level = "info"
+
+[session]
+db = "/app/data/crabbridge.db"
+memory_only = false
+
+[cache]
+enabled = false
+ttl_secs = 300
+max_entries = 1000
+
+[rate_limit]
+rps = 0
+
+[admin]
+enabled = true

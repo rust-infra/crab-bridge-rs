@@ -2,7 +2,8 @@
 
 use std::{env, fmt::Display};
 
-use reqwest::RequestBuilder;
+use anyhow::{Result, bail};
+use reqwest::{RequestBuilder, Url};
 use tracing::warn;
 
 /// User-Agent accepted by the Kimi Code API for upstream requests.
@@ -80,17 +81,15 @@ impl ProviderKind {
         &["deepseek", "kimi"]
     }
 
-    /// Resolve provider slugs for `setup` / `print-codex-config` from CLI flags.
+    /// Resolve provider slugs for `crabridge-cli setup` / `print-codex-config` from CLI flags.
     pub fn resolve_setup_slugs(
         all_providers: bool,
         providers: Option<&[String]>,
         single: &str,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<String>> {
         if let Some(list) = providers {
             if list.is_empty() {
-                return Err(
-                    "--providers requires at least one provider (e.g. kimi,deepseek)".into(),
-                );
+                bail!("--providers requires at least one provider (e.g. kimi,deepseek)");
             }
             let mut slugs = Vec::with_capacity(list.len());
             for raw in list {
@@ -99,7 +98,9 @@ impl ProviderKind {
                     continue;
                 }
                 let kind = Self::from_route(trimmed).ok_or_else(|| {
-                    format!("unknown provider {trimmed:?} in --providers (use deepseek, kimi)")
+                    anyhow::anyhow!(
+                        "unknown provider {trimmed:?} in --providers (use deepseek, kimi)"
+                    )
                 })?;
                 let slug = kind.route_slug().to_string();
                 if !slugs.contains(&slug) {
@@ -107,9 +108,7 @@ impl ProviderKind {
                 }
             }
             if slugs.is_empty() {
-                return Err(
-                    "--providers requires at least one provider (e.g. kimi,deepseek)".into(),
-                );
+                bail!("--providers requires at least one provider (e.g. kimi,deepseek)");
             }
             Ok(slugs)
         } else if all_providers {
@@ -257,6 +256,16 @@ impl ProviderKind {
 }
 
 /// Attach provider-specific upstream auth and headers to a reqwest request builder.
+/// Normalize upstream base URL to a trailing-slash prefix for path joins.
+pub fn join_upstream_base(url: &Url) -> String {
+    let s = url.as_str();
+    if s.ends_with('/') {
+        s.to_string()
+    } else {
+        format!("{s}/")
+    }
+}
+
 pub fn apply_upstream_headers(
     builder: RequestBuilder,
     kind: ProviderKind,

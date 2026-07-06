@@ -1,0 +1,35 @@
+---
+description: "CrabBridge project development guidelines"
+globs: ["src/**/*.rs"]
+alwaysApply: true
+---
+
+# CrabBridge Project Guidelines
+
+## Code Style
+- **Naming**:
+  - Types (structs/enums): `PascalCase`
+  - Functions/variables: `snake_case`
+  - Constants: `SCREAMING_SNAKE_CASE`
+- **Formatting**: must pass `cargo fmt`
+- **Clippy**: must pass `cargo clippy -- -D warnings`
+
+## Error Handling
+- Use `anyhow::Result` or the custom `BridgeError` type
+- **Never** use `unwrap()` or `expect()` (except in tests)
+- Use the `?` operator for error propagation
+
+## Modularity
+- Keep functions single-purpose; aim for no more than 100 lines per function
+- Keep module responsibilities clear: `bridge.rs` handles bridging logic only, `opts.rs` handles command-line parsing only
+
+## Output Requirements
+- ✅ Output complete file contents
+- ✅ Include all necessary `use` statements
+- ✅ Provide full function body implementations
+- ❌ Never use "// ... existing code ..." placeholders
+- ❌ Never truncate files
+
+## Security
+- Pass API keys via environment variables; never hardcode them
+- Use `serde` for safe deserialization

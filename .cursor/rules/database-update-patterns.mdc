@@ -1,0 +1,50 @@
+---
+description: "Prefer targeted database updates over read-modify-write for metadata changes"
+globs:
+  - "**/*.rs"
+  - "**/*.go"
+  - "**/*.py"
+  - "**/*.js"
+  - "**/*.ts"
+  - "**/*.tsx"
+  - "**/*.jsx"
+  - "**/*.mjs"
+  - "**/*.cjs"
+alwaysApply: false
+---
+
+# Database Update Patterns
+
+When updating only metadata or a small subset of columns, prefer a targeted
+`UPDATE` statement over reading the whole row, mutating it in memory, and
+writing the full record back.
+
+## Rule
+
+- Do not use read-modify-write for simple column updates such as `last_used_at`,
+  counters, status flags, timestamps, or soft-delete markers.
+- Add focused repository/store methods such as `touch_session_last_used(...)`
+  that update only the affected columns.
+- Keep full-row read/write paths for cases where the full payload is actually
+  being changed.
+- Preserve error handling: return `Result` from the store method and log or
+  propagate errors at the call site.
+
+## Example
+
+Applies to Rust, Go, Python, Node.js, and other database access layers. Pattern
+is the same: issue a narrow update instead of reloading the full row.
+
+```rust
+// Avoid: reads and deserializes the full row, then rewrites payload columns.
+if let Some(mut record) = store.read_session(id)? {
+    record.last_used_at_unix_ms = now_ms;
+    store.write_session_record(&record)?;
+}
+
+// Prefer: updates only the changed metadata column.
+store.touch_session_last_used(id, now)?;
+```
+
+This avoids unnecessary deserialization, large payload rewrites, and extra
+database round trips.

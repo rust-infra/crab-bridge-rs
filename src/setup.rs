@@ -57,7 +57,7 @@ pub struct SetupCheckOptions {
     pub bind_addr: SocketAddr,
 }
 
-/// Result of `crabridge setup`.
+/// Result of `crabridge-cli setup`.
 #[derive(Debug, Clone)]
 pub struct SetupResult {
     pub provider: ProviderKind,
@@ -123,7 +123,6 @@ pub async fn run_setup(opts: SetupOptions) -> Result<SetupResult> {
     merge_codex_config(
         &codex_config_path,
         &codex_provider_name,
-        &model,
         &catalog_path,
         &bridge_base_url,
         opts.provider.codex_env_key(),
@@ -187,7 +186,6 @@ pub async fn run_setup(opts: SetupOptions) -> Result<SetupResult> {
 pub fn merge_codex_config(
     path: &Path,
     provider_name: &str,
-    model: &str,
     catalog_path: &Path,
     bridge_base_url: &str,
     env_key: &str,
@@ -204,8 +202,8 @@ pub fn merge_codex_config(
         .with_context(|| format!("existing {} is not valid TOML", path.display()))?;
 
     if set_active {
+        doc.remove("model");
         doc.insert("model_provider", value(provider_name));
-        doc.insert("model", value(model));
         doc.insert(
             "model_catalog_json",
             value(catalog_path.display().to_string()),
@@ -361,7 +359,7 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
             &mut checks,
             "model_provider",
             CheckStatus::Warn,
-            format!("legacy \"{LEGACY_PROVIDER_NAME}\" — run `crabridge setup` to migrate"),
+            format!("legacy \"{LEGACY_PROVIDER_NAME}\" — run `crabridge-cli setup` to migrate"),
         ),
         Some(other) => push_check(
             &mut checks,
@@ -373,7 +371,7 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
             &mut checks,
             "model_provider",
             CheckStatus::Fail,
-            "not set — run `crabridge setup`".into(),
+            "not set — run `crabridge-cli setup`".into(),
         ),
     }
 
@@ -526,7 +524,7 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
                     &mut checks,
                     &format!("[{slug}] model_providers.{codex_name}"),
                     CheckStatus::Fail,
-                    format!("section missing — run `crabridge setup --provider {slug}`"),
+                    format!("section missing — run `crabridge-cli setup --provider {slug}`"),
                 );
             }
         }
@@ -623,7 +621,7 @@ fn check_bridge_config_file(checks: &mut Vec<ConfigCheck>, path: &Path) {
             "bridge config",
             CheckStatus::Warn,
             format!(
-                "{} not found (optional — run `crabridge setup` to generate)",
+                "{} not found (optional — run `crabridge-cli setup` to generate)",
                 path.display()
             ),
         );
@@ -806,7 +804,7 @@ pub fn print_setup_check(report: &SetupCheckReport) {
 
     println!();
     if report.has_failures() {
-        println!("Result: FAILED — fix the items above, then run `crabridge setup` if needed.");
+        println!("Result: FAILED — fix the items above, then run `crabridge-cli setup` if needed.");
     } else if report.has_warnings() {
         println!("Result: OK with warnings.");
     } else {
@@ -814,7 +812,9 @@ pub fn print_setup_check(report: &SetupCheckReport) {
     }
     println!();
     if report.has_failures() {
-        println!("Quick fix: crabridge setup --provider deepseek   # or --providers kimi,deepseek");
+        println!(
+            "Quick fix: crabridge-cli setup --provider deepseek   # or --providers kimi,deepseek"
+        );
     }
     println!();
 }
@@ -858,7 +858,6 @@ trust_level = "trusted"
         merge_codex_config(
             &path,
             "crabbridge-kimi",
-            "kimi-for-coding",
             &catalog,
             "http://127.0.0.1:11435/kimi/v1",
             "KIMI_API_KEY",
@@ -868,7 +867,7 @@ trust_level = "trusted"
 
         let merged = fs::read_to_string(&path).unwrap();
         assert!(merged.contains("model_provider = \"crabbridge-kimi\""));
-        assert!(merged.contains("model = \"kimi-for-coding\""));
+        assert!(!merged.contains("model = "));
         assert!(merged.contains("[model_providers.crabbridge-kimi]"));
         assert!(merged.contains("env_key = \"KIMI_API_KEY\""));
         assert!(merged.contains("[projects.\"/tmp/foo\"]"));
