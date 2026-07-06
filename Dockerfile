@@ -1,4 +1,8 @@
-FROM rust:bookworm AS builder
+# China Docker registry mirror (DaoCloud). Override for non-CN builds:
+#   docker build --build-arg DOCKER_REGISTRY= .
+ARG DOCKER_REGISTRY=docker.m.daocloud.io/library/
+
+FROM ${DOCKER_REGISTRY}rust:bookworm AS builder
 
 WORKDIR /app
 
@@ -10,9 +14,18 @@ COPY static ./static
 
 RUN cargo build --release --bin crabridge
 
-FROM debian:bookworm-slim AS runtime
+FROM ${DOCKER_REGISTRY}debian:bookworm-slim AS runtime
 
-RUN apt-get update \
+# Use Aliyun Debian mirror for faster apt downloads in China.
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' \
+        /etc/apt/sources.list.d/debian.sources; \
+    elif [ -f /etc/apt/sources.list ]; then \
+      sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' \
+        /etc/apt/sources.list; \
+    fi; \
+    apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
