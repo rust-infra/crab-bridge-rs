@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
-use crab_bridge_rs::cli::run;
-use crab_bridge_rs::cli_opts::CrabridgeCli;
-use crab_bridge_rs::runtime;
+use crabbridge_cli::cli::run;
+use crabbridge_cli::cli_opts::CrabridgeCli;
+use crabbridge_core::runtime;
 
 fn main() -> Result<()> {
     runtime::init()?;

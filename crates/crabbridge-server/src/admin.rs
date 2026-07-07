@@ -195,8 +195,8 @@ fn build_overview(state: &AppState) -> OverviewResponse {
         .providers
         .iter()
         .map(|(slug, runtime)| {
-            let kind = crate::provider::ProviderKind::from_route(slug)
-                .unwrap_or(crate::provider::ProviderKind::Custom);
+            let kind = crabbridge_core::provider::ProviderKind::from_route(slug)
+                .unwrap_or(crabbridge_core::provider::ProviderKind::Custom);
             ProviderOverview {
                 slug: slug.clone(),
                 upstream: runtime.upstream.to_string(),

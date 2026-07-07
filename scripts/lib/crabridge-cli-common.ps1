@@ -56,7 +56,7 @@ function Invoke-CrabridgeCli {
     if ($Cli.Mode -eq "cargo") {
         Push-Location $Cli.Path
         try {
-            & cargo run --quiet --bin crabridge-cli --no-default-features -- @Args
+            & cargo run --quiet --bin crabridge-cli -- @Args
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         } finally {
             Pop-Location

@@ -58,7 +58,7 @@ function Build-Binary([string]$SourceDir) {
     Push-Location $SourceDir
     try {
         cargo build --release --bin $BinaryName
-        cargo build --release --bin "crabridge-cli" --no-default-features
+        cargo build --release --bin "crabridge-cli"
     } finally {
         Pop-Location
     }

@@ -7,12 +7,12 @@ use reqwest::Client;
 
 use crate::cli_opts::{Commands, CrabridgeCli, PrintCodexConfigArgs, SetupArgs};
 use crate::codex_config::print_codex_config;
-use crate::config::{
+use crate::setup::{self, SetupOptions, print_setup_summary};
+use crabbridge_core::config::{
     default_config_write_path, explicit_config_from_cli, load_config_file, resolve_api_key,
     validate_upstream_url,
 };
-use crate::provider::ProviderKind;
-use crate::setup::{self, SetupOptions, print_setup_summary};
+use crabbridge_core::provider::ProviderKind;
 
 /// Run `crabridge-cli` after Clap parsing.
 pub async fn run(cli: CrabridgeCli) -> Result<()> {

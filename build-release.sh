@@ -60,8 +60,6 @@ package_binary() {
   local target="$1"
   local suffix="$2"
   local bin_name="$3"
-  local no_default_features="${4:-0}"
-
   local src_dir="target/${target}/release"
   local exe_name="${bin_name}"
   local out_name="${bin_name}-${suffix}"
@@ -104,8 +102,8 @@ build_target() {
   cargo zigbuild --release --target "${target}" --bin "${SERVER_BIN}"
   package_binary "${target}" "${suffix}" "${SERVER_BIN}"
 
-  cargo zigbuild --release --target "${target}" --bin "${CLI_BIN}" --no-default-features
-  package_binary "${target}" "${suffix}" "${CLI_BIN}" 1
+  cargo zigbuild --release --target "${target}" --bin "${CLI_BIN}"
+  package_binary "${target}" "${suffix}" "${CLI_BIN}"
 }
 
 main() {

@@ -11,12 +11,13 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
+use crabbridge_core::provider::{ProviderKind, apply_upstream_headers};
+use crabbridge_core::types::{ChatMessage, ChatRequest, ChatStreamChunk, ChatUsage};
+
 use crate::{
     metrics::BridgeMetrics,
-    provider::{ProviderKind, apply_upstream_headers},
     session::SessionStore,
     translate::{NamespaceToolMap, response_function_name_for_responses},
-    types::{ChatMessage, ChatRequest, ChatStreamChunk, ChatUsage},
     upstream_request::UpstreamRequestConfig,
 };
 

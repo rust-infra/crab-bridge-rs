@@ -52,47 +52,61 @@ Legacy `/v1/*` routes still work and map to `default_provider` from `crabbridge.
 | CORS | tower-http CorsLayer |
 | SSE parsing | eventsource-stream, async-stream |
 
-**Does not use** `async-openai`. Responses / Chat Completions types are defined in `src/types.rs`.
+**Does not use** `async-openai`. Responses / Chat Completions types are defined in `crates/crabbridge-core/src/types.rs`.
 
 ---
 
 ## 3. Project Structure
 
+Cargo **workspace** with three crates. Shared logic lives in `crabbridge-core`; CLI and server are separate binaries with independent dependency trees.
+
 ```
 crab-bridge-rs/
-├── Cargo.toml
+├── Cargo.toml                      # workspace root
 ├── crabbridge.example.toml
 ├── .gitignore
 ├── AGENT_SPEC.md
-├── src/
-│   ├── main.rs              # crabridge entry (thin)
-│   ├── bin/
-│   │   └── crabridge-cli.rs # crabridge-cli entry (thin)
-│   ├── runtime.rs           # shared init + Tokio block_on
-│   ├── cli.rs               # setup / print-codex-config handlers
-│   ├── server.rs            # serve / prompt handlers
-│   ├── lib.rs               # Module exports (server modules behind `feature = "server"`)
-│   ├── app.rs               # build_router()
-│   ├── opts.rs              # Clap for crabridge (BridgeCli)
-│   ├── cli_opts.rs          # Clap for crabridge-cli (CrabridgeCli)
-│   ├── config.rs            # crabbridge.toml load + provider resolution
-│   ├── provider.rs          # DeepSeek / Kimi presets, route slugs, model matching
-│   ├── setup.rs             # setup + setup --docker config checks
-│   ├── handlers.rs          # HTTP handlers (routed + legacy /v1)
-│   ├── state.rs             # AppState + per-provider ProviderRuntime
-│   ├── types.rs             # Responses + Chat Completions type definitions
-│   ├── translate.rs         # Responses ↔ Chat conversion, model/tool mapping
-│   ├── stream.rs            # Chat SSE → Responses SSE streaming translation
-│   ├── session.rs           # Session store (previous_response_id, reasoning replay)
-│   ├── session_sqlite.rs    # SQLite persistence (PK = response_id / reasoning key)
-│   ├── upstream_request.rs  # Upstream request body + tool denylist
-│   ├── cache.rs             # Non-streaming response cache (moka)
-│   ├── metrics.rs           # Runtime counters + Prometheus export
-│   ├── admin.rs             # /admin dashboard + /metrics handlers
-│   └── prompt.rs            # ResponsesSseParser (prompt subcommand streaming)
-└── tests/
-    └── integration.rs       # mockito integration tests
+├── crates/
+│   ├── crabbridge-core/            # shared library
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── types.rs            # Responses + Chat Completions type definitions
+│   │       ├── provider.rs         # DeepSeek / Kimi presets, route slugs, model matching
+│   │       ├── config.rs           # crabbridge.toml load + provider resolution
+│   │       └── runtime.rs          # shared init + Tokio block_on
+│   ├── crabbridge-cli/             # crabridge-cli binary + library
+│   │   └── src/
+│   │       ├── main.rs             # thin entry
+│   │       ├── lib.rs
+│   │       ├── cli.rs              # setup / print-codex-config handlers
+│   │       ├── cli_opts.rs         # Clap for crabridge-cli (CrabridgeCli)
+│   │       ├── codex_config.rs     # Fetches upstream /models, writes Codex snippets
+│   │       └── setup.rs            # setup + setup --docker config checks
+│   └── crabbridge-server/          # crabridge binary + library
+│       ├── static/
+│       │   └── admin.html          # embedded admin dashboard
+│       ├── tests/
+│       │   └── integration.rs      # mockito integration tests
+│       └── src/
+│           ├── main.rs             # thin entry
+│           ├── lib.rs
+│           ├── server.rs           # serve / prompt handlers
+│           ├── opts.rs             # Clap for crabridge (BridgeCli)
+│           ├── app.rs              # build_router()
+│           ├── handlers.rs         # HTTP handlers (routed + legacy /v1)
+│           ├── state.rs            # AppState + per-provider ProviderRuntime
+│           ├── translate.rs        # Responses ↔ Chat conversion, model/tool mapping
+│           ├── stream.rs           # Chat SSE → Responses SSE streaming translation
+│           ├── session.rs          # Session store (previous_response_id, reasoning replay)
+│           ├── session_sqlite.rs   # SQLite persistence (PK = response_id / reasoning key)
+│           ├── upstream_request.rs # Upstream request body + tool denylist
+│           ├── cache.rs            # Non-streaming response cache (moka)
+│           ├── metrics.rs          # Runtime counters + Prometheus export
+│           ├── admin.rs            # /admin dashboard + /metrics handlers
+│           └── prompt.rs           # ResponsesSseParser (prompt subcommand streaming)
 ```
+
+**Crate dependencies**: `crabbridge-cli` → `crabbridge-core`; `crabbridge-server` → `crabbridge-core`. The CLI crate does not depend on axum, rusqlite, or moka.
 
 ---
 
@@ -100,14 +114,14 @@ crab-bridge-rs/
 
 ### 4.1 CLI binaries
 
-**`crabridge`** (`src/opts.rs`):
+**`crabridge`** (`crabbridge-server::opts`):
 
 | Subcommand | Description |
 |------------|-------------|
 | `serve` | Start the HTTP bridge server (`ServeArgs`) |
 | `prompt` | Send a test request to `/{provider}/v1/responses` |
 
-**`crabridge-cli`** (`src/cli_opts.rs`):
+**`crabridge-cli`** (`crabbridge-cli::cli_opts`):
 
 | Subcommand | Description |
 |------------|-------------|
@@ -121,7 +135,7 @@ crab-bridge-rs/
 
 Priority: **CLI flags > environment variable > TOML file > built-in defaults**.
 
-### 4.2 `src/config.rs`
+### 4.2 `crabbridge-core::config`
 
 Loads `crabbridge.toml` and resolves the provider map for `serve`:
 
@@ -146,7 +160,7 @@ model_map = "gpt-5.4:kimi-for-coding"
 
 `ProviderSection` fields: `base_url`, `model_map` only (no `api_key`, no `model`).
 
-### 4.3 `src/state.rs`
+### 4.3 `crabbridge-server::state`
 
 ```rust
 pub struct ProviderRuntime {
@@ -170,7 +184,7 @@ pub struct AppState {
 
 Default upstream model per route comes from `ProviderKind::default_model()`, not from TOML.
 
-### 4.4 `src/handlers.rs`
+### 4.4 `crabbridge-server::handlers`
 
 **Routes** (see `app.rs` / `build_router`):
 
@@ -195,7 +209,7 @@ Default upstream model per route comes from `ProviderKind::default_model()`, not
 
 **`handle_models`**: Filters upstream model IDs to those matching the route provider; merges `known_models_for_upstream(base_url)`.
 
-### 4.5 `src/translate.rs`
+### 4.5 `crabbridge-server::translate`
 
 **Model mapping** (`map_model_name`):
 
@@ -212,7 +226,7 @@ Examples:
 | `/kimi/v1` | `kimi-for-coding` | `kimi-for-coding` |
 | `/deepseek/v1` | `gpt-5.4` + map | mapped target |
 
-### 4.6 `src/session.rs` + `src/session_sqlite.rs`
+### 4.6 `crabbridge-server::session` + `session_sqlite`
 
 Sessions are keyed by **`response_id` only** for lookup. Codex can switch `model_provider` mid-conversation and still resume via `previous_response_id`.
 
@@ -228,7 +242,7 @@ Write paths pass `provider` slug to update the indexed column: `save_with_id(pro
 
 No schema migration code — greenfield `init_schema()` on open.
 
-### 4.7 `src/setup.rs`
+### 4.7 `crabbridge-cli::setup`
 
 Invoked by **`crabridge-cli setup`**:
 
@@ -239,7 +253,7 @@ Invoked by **`crabridge-cli setup`**:
 
 Codex provider names: `crabbridge-deepseek`, `crabbridge-kimi` (see `ProviderKind::codex_provider_name`).
 
-### 4.8 `src/provider.rs`
+### 4.8 `crabbridge-core::provider`
 
 | Slug | Default upstream | Default model | Codex `env_key` |
 |------|------------------|---------------|-----------------|
@@ -248,7 +262,7 @@ Codex provider names: `crabbridge-deepseek`, `crabbridge-kimi` (see `ProviderKin
 
 Kimi Code (`api.kimi.com/coding/v1`) and Moonshot Open Platform (`api.moonshot.ai/v1`) are separate systems — different keys and model IDs.
 
-### 4.9 `src/metrics.rs` + `src/admin.rs`
+### 4.9 `crabbridge-server::metrics` + `admin`
 
 **Metrics** (`BridgeMetrics` in `AppState`):
 
@@ -258,7 +272,7 @@ Kimi Code (`api.kimi.com/coding/v1`) and Moonshot Open Platform (`api.moonshot.a
 
 **Admin UI**:
 
-- `GET /admin` — embedded HTML dashboard (`static/admin.html`), polls overview every 3s
+- `GET /admin` — embedded HTML dashboard (`crates/crabbridge-server/static/admin.html`), polls overview every 3s
 - No authentication (intended for localhost-only use)
 - Disable via `[admin] enabled = false` in TOML
 
@@ -266,10 +280,10 @@ Handlers record metrics via `record_http_outcome()` in `handlers.rs`.
 
 ### 4.10 Other modules
 
-- **`cache.rs`**: Non-streaming response cache (moka); cache key includes provider + Bearer token hash
-- **`upstream_request.rs`**: Upstream JSON body + `CRABRIDGE_TOOL_DENYLIST`
-- **`codex_config.rs`**: Fetches upstream `/models`, writes `~/.codex/crabbridge-models-{slug}.json`
-- **`prompt.rs`**: `ResponsesSseParser` for CLI streaming output
+- **`crabbridge-server::cache`**: Non-streaming response cache (moka); cache key includes provider + Bearer token hash
+- **`crabbridge-server::upstream_request`**: Upstream JSON body + `CRABRIDGE_TOOL_DENYLIST`
+- **`crabbridge-cli::codex_config`**: Fetches upstream `/models`, writes `~/.codex/crabbridge-models-{slug}.json`
+- **`crabbridge-server::prompt`**: `ResponsesSseParser` for CLI streaming output
 
 ---
 
@@ -315,7 +329,7 @@ Maps to `default_provider` from config.
 
 Search order: `--config` / `-c` / `CRABRIDGE_CONFIG` → `./crabbridge.toml` → `~/.config/crabbridge/config.toml`.
 
-Config is loaded before Clap runs via [`config::explicit_config_before_cli`], then all subcommands share the same path from [`config::explicit_config_from_cli`] after parsing.
+Config is loaded before Clap runs via [`crabbridge_core::config::explicit_config_before_cli`], then all subcommands share the same path from [`crabbridge_core::config::explicit_config_from_cli`] after parsing.
 
 See `crabbridge.example.toml` for the full schema (`[server]`, `[session]`, `[cache]`, `[advanced]`).
 
@@ -384,10 +398,10 @@ Switch providers in Codex by changing `model_provider` and `model`.
 ## 9. Build & Run
 
 ```bash
-cargo build --release
-cargo run -- serve
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo build --workspace --release
+cargo run --bin crabridge -- serve
+cargo test --workspace
+cargo clippy --workspace -- -D warnings
 ```
 
 ---
@@ -398,7 +412,7 @@ cargo clippy --all-targets -- -D warnings
 
 Conversion, sessions (response_id keying, cross-provider resume), config resolution, setup checks, provider-aware model mapping.
 
-### 10.2 Integration tests (`tests/integration.rs`)
+### 10.2 Integration tests (`crates/crabbridge-server/tests/integration.rs`)
 
 Uses mockito; exercises `/deepseek/v1/responses`, `/deepseek/v1/models`, and legacy `/v1/responses`.
 

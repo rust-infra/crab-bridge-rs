@@ -100,7 +100,7 @@ build_binary() {
     (
         cd "${BUILD_DIR}"
         cargo build --release --bin "${BINARY_NAME}"
-        cargo build --release --bin "${CLI_BINARY_NAME}" --no-default-features
+        cargo build --release --bin "${CLI_BINARY_NAME}"
     )
 }
 

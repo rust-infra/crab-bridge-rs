@@ -259,11 +259,11 @@ All upstream-bound requests require `Authorization: Bearer <api_key>`. `/v1/chat
 ## Development
 
 ```bash
-cargo build --release --bins                              # both binaries (server feature enabled)
-cargo build --release --bin crabridge                     # HTTP bridge only
-cargo build --release --bin crabridge-cli --no-default-features  # slim CLI (no axum/sqlite/moka)
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo build --workspace --release          # both binaries
+cargo build --release --bin crabridge      # HTTP bridge only
+cargo build --release --bin crabridge-cli    # slim CLI (no axum/sqlite/moka)
+cargo test --workspace
+cargo clippy --workspace -- -D warnings
 ```
 
 For architecture details and module design, see [AGENT_SPEC.md](AGENT_SPEC.md).
@@ -271,27 +271,38 @@ For architecture details and module design, see [AGENT_SPEC.md](AGENT_SPEC.md).
 ## Project Layout
 
 ```
-src/
-├── main.rs              # crabridge entry (thin)
-├── bin/
-│   └── crabridge-cli.rs # crabridge-cli entry (thin)
-├── runtime.rs           # shared init + Tokio block_on
-├── cli.rs               # setup / print-codex-config handlers
-├── server.rs            # serve / prompt handlers (feature: server)
-├── cli_opts.rs          # Clap for crabridge-cli
-├── opts.rs              # Clap for crabridge (feature: server)
-├── app.rs               # Router construction
-├── admin.rs             # /admin dashboard + /metrics
-├── metrics.rs           # Runtime counters + Prometheus export
-├── handlers.rs          # HTTP routes
-├── translate.rs         # Responses ↔ Chat conversion
-├── stream.rs            # Streaming SSE translation
-├── session.rs           # Session store
-├── session_sqlite.rs    # SQLite persistence
-├── config.rs            # TOML load + provider resolution
-├── provider.rs          # DeepSeek / Kimi presets
-├── setup.rs             # setup + setup --docker
-└── ...
+crab-bridge-rs/
+├── Cargo.toml                    # workspace root
+├── crates/
+│   ├── crabbridge-core/          # shared types, config, provider, runtime
+│   │   └── src/
+│   │       ├── types.rs          # Responses + Chat Completions types
+│   │       ├── provider.rs       # DeepSeek / Kimi presets
+│   │       ├── config.rs         # TOML load + provider resolution
+│   │       └── runtime.rs        # shared init + Tokio block_on
+│   ├── crabbridge-cli/           # Codex setup binary (crabridge-cli)
+│   │   └── src/
+│   │       ├── main.rs           # thin entry
+│   │       ├── cli.rs            # setup / print-codex-config handlers
+│   │       ├── cli_opts.rs       # Clap for crabridge-cli
+│   │       ├── codex_config.rs   # Codex config snippet generator
+│   │       └── setup.rs          # setup + setup --docker
+│   └── crabbridge-server/        # HTTP bridge binary (crabridge)
+│       ├── static/admin.html     # embedded admin dashboard
+│       ├── tests/integration.rs  # mockito integration tests
+│       └── src/
+│           ├── main.rs           # thin entry
+│           ├── server.rs         # serve / prompt handlers
+│           ├── opts.rs           # Clap for crabridge
+│           ├── app.rs            # Router construction
+│           ├── admin.rs          # /admin dashboard + /metrics
+│           ├── metrics.rs        # Runtime counters + Prometheus export
+│           ├── handlers.rs       # HTTP routes
+│           ├── translate.rs      # Responses ↔ Chat conversion
+│           ├── stream.rs         # Streaming SSE translation
+│           ├── session.rs        # Session store
+│           ├── session_sqlite.rs # SQLite persistence
+│           └── ...
 scripts/
 ├── install-macos.sh
 ├── install-linux.sh

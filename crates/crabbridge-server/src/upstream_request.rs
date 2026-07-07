@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
 
-use crate::types::ChatRequest;
+use crabbridge_core::types::ChatRequest;
 
 #[derive(Clone, Debug, Default)]
 pub struct UpstreamRequestConfig {
@@ -77,7 +77,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::types::ChatMessage;
+    use crabbridge_core::types::ChatMessage;
 
     fn chat_request() -> ChatRequest {
         ChatRequest {

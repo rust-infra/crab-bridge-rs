@@ -18,17 +18,17 @@ use tracing_subscriber::EnvFilter;
 
 use crate::app::build_router;
 use crate::cache::ResponseCache;
-use crate::config::{
-    admin_enabled, load_config_file, resolve_api_key, resolve_config_path, resolve_serve_providers,
-    validate_upstream_url,
-};
 use crate::metrics::BridgeMetrics;
 use crate::opts::{BridgeCli, Commands, ServeArgs};
 use crate::prompt::ResponsesSseParser;
-use crate::provider::ProviderKind;
 use crate::session::{DEFAULT_MAX_SESSION_BYTES, SessionStore};
 use crate::state::{AppState, ProviderRuntime};
 use crate::upstream_request::UpstreamRequestConfig;
+use crabbridge_core::config::{
+    admin_enabled, load_config_file, resolve_api_key, resolve_config_path, resolve_serve_providers,
+    validate_upstream_url,
+};
+use crabbridge_core::provider::ProviderKind;
 
 /// Run `crabridge` after Clap parsing.
 pub async fn run(cli: BridgeCli, config_path: Option<PathBuf>) -> Result<()> {

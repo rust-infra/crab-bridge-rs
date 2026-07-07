@@ -1,7 +1,10 @@
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
-use crate::{provider::ProviderKind, session::SessionStore, types::*};
+use crabbridge_core::provider::ProviderKind;
+use crabbridge_core::types::*;
+
+use crate::session::SessionStore;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamespaceToolName {

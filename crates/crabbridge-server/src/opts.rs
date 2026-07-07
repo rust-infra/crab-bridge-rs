@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::config::default_config_path;
 use crate::session::{DEFAULT_MAX_SESSIONS, DEFAULT_SESSION_TTL};
+use crabbridge_core::config::default_config_path;
 
 #[derive(Parser, Debug)]
 #[command(

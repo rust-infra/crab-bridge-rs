@@ -3,11 +3,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crab_bridge_rs::app::build_router;
-use crab_bridge_rs::metrics::BridgeMetrics;
-use crab_bridge_rs::session::SessionStore;
-use crab_bridge_rs::state::{AppState, ProviderRuntime};
-use crab_bridge_rs::upstream_request::UpstreamRequestConfig;
+use crabbridge_server::app::build_router;
+use crabbridge_server::metrics::BridgeMetrics;
+use crabbridge_server::session::SessionStore;
+use crabbridge_server::state::{AppState, ProviderRuntime};
+use crabbridge_server::upstream_request::UpstreamRequestConfig;
 use reqwest::Client;
 use serde_json::json;
 use std::time::Instant;
@@ -292,7 +292,7 @@ async fn kimi_models_endpoint_proxies_upstream() {
 
 #[tokio::test]
 async fn kimi_upstream_requests_include_user_agent() {
-    use crab_bridge_rs::provider::KIMI_UPSTREAM_USER_AGENT;
+    use crabbridge_core::provider::KIMI_UPSTREAM_USER_AGENT;
 
     let mut mock = mockito::Server::new_async().await;
     let _mock = mock

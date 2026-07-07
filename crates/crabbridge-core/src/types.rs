@@ -165,14 +165,14 @@ pub struct PromptTokensDetails {
 impl ChatUsage {
     /// Cached (hit) prompt tokens. Prefers the DeepSeek-style top-level field,
     /// else falls back to the OpenAI-style `prompt_tokens_details.cached_tokens`.
-    pub(crate) fn cache_hit(&self) -> u32 {
+    pub fn cache_hit(&self) -> u32 {
         self.prompt_cache_hit_tokens
             .or_else(|| self.prompt_tokens_details.as_ref().map(|d| d.cached_tokens))
             .unwrap_or(0)
     }
 
     /// Non-cached (miss) prompt tokens; falls back to `prompt_tokens - hit`.
-    pub(crate) fn cache_miss(&self) -> u32 {
+    pub fn cache_miss(&self) -> u32 {
         self.prompt_cache_miss_tokens
             .unwrap_or_else(|| self.prompt_tokens.saturating_sub(self.cache_hit()))
     }

@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use reqwest::{Client, Url};
 use serde_json::{Value, json};
 
-use crate::provider::{ProviderKind, apply_upstream_headers, join_upstream_base};
+use crabbridge_core::provider::{ProviderKind, apply_upstream_headers, join_upstream_base};
 
 pub struct ModelProps {
     pub context_window: u32,

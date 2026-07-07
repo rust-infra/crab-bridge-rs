@@ -1,9 +1,9 @@
 use anyhow::Result;
 use clap::Parser;
-use crab_bridge_rs::config::explicit_config_from_cli;
-use crab_bridge_rs::opts::BridgeCli;
-use crab_bridge_rs::runtime;
-use crab_bridge_rs::server;
+use crabbridge_core::config::explicit_config_from_cli;
+use crabbridge_core::runtime;
+use crabbridge_server::opts::BridgeCli;
+use crabbridge_server::server;
 
 fn main() -> Result<()> {
     runtime::init()?;

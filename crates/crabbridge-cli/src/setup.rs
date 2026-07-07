@@ -14,8 +14,8 @@ use tracing::info;
 use crate::codex_config::{
     catalog_path_for_slug, codex_home_dir, prepare_model_catalog, write_model_catalog,
 };
-use crate::config::{self, BridgeConfigFile};
-use crate::provider::ProviderKind;
+use crabbridge_core::config::{self, BridgeConfigFile};
+use crabbridge_core::provider::ProviderKind;
 
 const LEGACY_PROVIDER_NAME: &str = "crabbridge";
 

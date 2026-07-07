@@ -308,7 +308,38 @@ dependencies = [
 ]
 
 [[package]]
-name = "crab-bridge-rs"
+name = "crabbridge-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crabbridge-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "toml_edit",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "crabbridge-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "crabbridge-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -316,6 +347,7 @@ dependencies = [
  "axum",
  "bytes",
  "clap",
+ "crabbridge-core",
  "eventsource-stream",
  "futures-util",
  "http-body-util",
@@ -326,8 +358,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "toml",
- "toml_edit",
  "tower-http",
  "tower_governor",
  "tracing",

@@ -69,7 +69,7 @@ crabridge_run_cli() {
     if [[ "${cli}" == "cargo-run" ]]; then
         (
             cd "$(crabridge_repo_root)"
-            cargo run --quiet --bin crabridge-cli --no-default-features -- "$@"
+            cargo run --quiet --bin crabridge-cli -- "$@"
         )
         return
     fi

@@ -6,7 +6,7 @@ use rusqlite::{Connection, params};
 use tracing::warn;
 
 use crate::session::{DiskReasoningRecord, DiskSessionRecord};
-use crate::types::ChatMessage;
+use crabbridge_core::types::ChatMessage;
 
 pub(crate) const DEFAULT_PROVIDER: &str = "default";
 
@@ -406,7 +406,7 @@ fn warn_if_touch_missed(updated: usize, entity: &str, key: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ChatMessage;
+    use crabbridge_core::types::ChatMessage;
     use std::time::Duration;
 
     fn temp_db(name: &str) -> std::path::PathBuf {

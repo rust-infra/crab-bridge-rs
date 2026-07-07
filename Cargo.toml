@@ -1,39 +1,16 @@
-[package]
-name = "crab-bridge-rs"
+[workspace]
+resolver = "2"
+members = [
+    "crates/crabbridge-core",
+    "crates/crabbridge-cli",
+    "crates/crabbridge-server",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[features]
-default = ["server"]
-server = [
-    "dep:axum",
-    "dep:tower-http",
-    "dep:tower_governor",
-    "dep:moka",
-    "dep:rusqlite",
-    "dep:eventsource-stream",
-    "dep:async-stream",
-    "dep:bytes",
-    "dep:uuid",
-    "dep:futures-util",
-    "dep:tracing-subscriber",
-]
-
-[[bin]]
-name = "crabridge"
-path = "src/main.rs"
-required-features = ["server"]
-
-[[bin]]
-name = "crabridge-cli"
-path = "src/bin/crabridge-cli.rs"
-
-[[test]]
-name = "integration"
-path = "tests/integration.rs"
-required-features = ["server"]
-
-[dependencies]
+[workspace.dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
@@ -43,26 +20,27 @@ tokio = { version = "1", features = ["full"] }
 toml = "0.8"
 toml_edit = "0.22"
 tracing = "0.1"
-
-axum = { version = "0.8", features = ["json"], optional = true }
-tower-http = { version = "0.6", features = ["cors"], optional = true }
-tower_governor = { version = "0.8", optional = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
-futures-util = { version = "0.3", optional = true }
-moka = { version = "0.12", features = ["future"], optional = true }
-bytes = { version = "1", optional = true }
-uuid = { version = "1", features = ["v4"], optional = true }
-eventsource-stream = { version = "0.2", optional = true }
-async-stream = { version = "0.3", optional = true }
-rusqlite = { version = "0.32", features = ["bundled"], optional = true }
-
-[dev-dependencies]
+axum = { version = "0.8", features = ["json"] }
+tower-http = { version = "0.6", features = ["cors"] }
+tower_governor = "0.8"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures-util = "0.3"
+moka = { version = "0.12", features = ["future"] }
+bytes = "1"
+uuid = { version = "1", features = ["v4"] }
+eventsource-stream = "0.2"
+async-stream = "0.3"
+rusqlite = { version = "0.32", features = ["bundled"] }
 mockito = "1"
 http-body-util = "0.1"
 
+crabbridge-core = { path = "crates/crabbridge-core" }
+crabbridge-cli = { path = "crates/crabbridge-cli" }
+crabbridge-server = { path = "crates/crabbridge-server" }
+
 [profile.release]
-opt-level = "z"        # 体积优先；如需要性能可改为 3
-lto = true             # 链接时优化，显著减小体积
-panic = "abort"        # 去掉 panic 栈展开信息
-strip = true           # 去掉符号表（Rust 1.59+）
-codegen-units = 1      # 单一代码单元，LTO 效果最佳
+opt-level = "z"
+lto = true
+panic = "abort"
+strip = true
+codegen-units = 1

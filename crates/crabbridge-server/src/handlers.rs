@@ -13,12 +13,12 @@ use tracing::{debug, error, info, warn};
 
 use crate::cache::ResponseCache;
 use crate::metrics::BridgeMetrics;
-use crate::provider::{ProviderKind, apply_upstream_headers, join_upstream_base};
 use crate::state::{AppState, ProviderRuntime};
 use crate::stream::{self, StreamArgs};
 use crate::translate;
 use crate::translate::TranslationOptions;
-use crate::types::*;
+use crabbridge_core::provider::{ProviderKind, apply_upstream_headers, join_upstream_base};
+use crabbridge_core::types::*;
 
 const DEBUG_NAME_LIMIT: usize = 80;
 

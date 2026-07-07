@@ -9,7 +9,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::session_sqlite::SqliteStore;
-use crate::types::ChatMessage;
+use crabbridge_core::types::ChatMessage;
 
 pub const DEFAULT_MAX_SESSIONS: usize = 256;
 pub const DEFAULT_MAX_SESSION_BYTES: usize = 512 * 1024 * 1024;
@@ -776,7 +776,7 @@ fn value_bytes(value: &serde_json::Value) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ChatMessage;
+    use crabbridge_core::types::ChatMessage;
     use std::path::PathBuf;
 
     const TEST_PROVIDER: &str = "test";
