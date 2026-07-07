@@ -1,0 +1,65 @@
+/* Provider selector — native segmented control style */
+
+.provider-list {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--segment-bg);
+  border-radius: var(--radius-sm);
+  margin-bottom: 16px;
+}
+
+.provider-chip {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.provider-chip:hover:not(.active) {
+  color: var(--text);
+}
+
+.provider-chip.active {
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.provider-chip.configured:not(.active)::after {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  vertical-align: middle;
+}
+
+.provider-panel .field-label,
+.provider-panel label.field-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin: 12px 0 6px;
+}
+
+.provider-panel input[type="password"],
+.provider-panel input[type="text"] {
+  width: 100%;
+  margin-bottom: 0;
+}
+
+.provider-panel .field-hint#provider-default-hint {
+  margin-top: -8px;
+  margin-bottom: 4px;
+}

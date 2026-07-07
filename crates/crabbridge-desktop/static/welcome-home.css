@@ -1,0 +1,80 @@
+/* Welcome home — status-first layout for returning users */
+
+.home-hero {
+  text-align: center;
+  padding: 8px 0 4px;
+}
+
+.home-hero .status-pill {
+  font-size: 12px;
+  padding: 4px 12px;
+  margin-bottom: 12px;
+}
+
+.home-hero h2 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0 0 8px;
+}
+
+.home-hero .home-subtitle {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin: 0 0 20px;
+  line-height: 1.5;
+}
+
+.home-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.home-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.home-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.home-meta-row .label {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.home-meta-row .value {
+  font-weight: 500;
+  text-align: right;
+  word-break: break-all;
+}
+
+.home-footer-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.view-setup[hidden],
+.view-home[hidden] {
+  display: none !important;
+}
+
+.welcome-header.is-home h1 {
+  font-size: 22px;
+}
+
+.setup-only-hint {
+  margin-top: -6px;
+  margin-bottom: 8px;
+}

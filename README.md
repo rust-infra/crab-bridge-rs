@@ -268,7 +268,7 @@ cargo run --bin crabbridge-desktop
 
 ### First-run flow
 
-1. **Environment** — CrabBridge reads `DEEPSEEK_API_KEY` / `KIMI_API_KEY` from your login shell (same vars Codex uses). No manual key entry in the wizard.
+1. **Provider Configuration** — select DeepSeek or Kimi, set Base URL, verify API key (masked from shell env when available), save.
 2. **Run Setup** — writes `~/.codex/config.toml`, model catalogs, and `~/.config/crabbridge/config.toml`.
 3. **Start Bridge & Finish** — starts the embedded bridge and marks onboarding complete.
 

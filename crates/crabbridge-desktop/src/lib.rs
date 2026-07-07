@@ -28,8 +28,10 @@ use provider_config::{ProviderConfigSaveRequest, ProviderConfigSnapshot};
 use secrets::{SecretStatus, hydrate_api_keys};
 use serde::Serialize;
 use tauri::menu::MenuEvent;
-use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, State};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+const BRIDGE_STATUS_EVENT: &str = "bridge-status-changed";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -59,12 +61,19 @@ fn bridge_response(manager: &BridgeManager) -> BridgeStatusResponse {
     }
 }
 
+fn emit_bridge_status(app: &AppHandle, manager: &BridgeManager) {
+    if let Err(err) = app.emit(BRIDGE_STATUS_EVENT, bridge_response(manager)) {
+        tracing::debug!(error = %err, "failed to emit bridge status event");
+    }
+}
+
 async fn refresh_tray_state(app: &AppHandle, manager: &BridgeManager) {
     let running = manager.status() == BridgeStatus::Running;
     let _ = tray::refresh_tray_menu(app, running);
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_tooltip(Some(tray::tray_tooltip(status_label(manager.status()))));
     }
+    emit_bridge_status(app, manager);
 }
 
 #[tauri::command]
@@ -76,17 +85,21 @@ async fn bridge_status(
 
 #[tauri::command]
 async fn bridge_start(
+    app: AppHandle,
     manager: State<'_, Arc<BridgeManager>>,
 ) -> Result<BridgeStatusResponse, String> {
     manager.start().await.map_err(|err| err.to_string())?;
+    refresh_tray_state(&app, &manager).await;
     Ok(bridge_response(&manager))
 }
 
 #[tauri::command]
 async fn bridge_stop(
+    app: AppHandle,
     manager: State<'_, Arc<BridgeManager>>,
 ) -> Result<BridgeStatusResponse, String> {
     manager.stop().await.map_err(|err| err.to_string())?;
+    refresh_tray_state(&app, &manager).await;
     Ok(bridge_response(&manager))
 }
 
@@ -194,6 +207,11 @@ fn logs_reveal() -> Result<(), String> {
         open::that(parent).map_err(|err| err.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+fn open_settings(app: AppHandle) -> Result<(), String> {
+    settings::open_settings(&app).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -330,17 +348,7 @@ async fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
     refresh_tray_state(app, &manager).await;
 }
 
-async fn bootstrap(app_handle: &AppHandle, manager: Arc<BridgeManager>) {
-    let show_welcome = prefs::needs_onboarding(manager.config_dir()).unwrap_or(true);
-    if show_welcome || !bridge::config_exists(&manager.config_path()) {
-        tracing::info!("opening onboarding wizard");
-        if let Err(err) = settings::open_welcome(app_handle) {
-            tracing::error!(error = %err, "failed to open welcome window");
-            let _ = settings::open_settings(app_handle);
-        }
-        return;
-    }
-
+async fn bootstrap_existing(app_handle: &AppHandle, manager: Arc<BridgeManager>) {
     match manager.start().await {
         Ok(()) => {
             notify::show_info(app_handle, "CrabBridge", "Bridge started");
@@ -349,6 +357,7 @@ async fn bootstrap(app_handle: &AppHandle, manager: Arc<BridgeManager>) {
         Err(err) => {
             tracing::error!(error = %err, "auto-start failed");
             notify::show_error(app_handle, &format!("Auto-start failed: {err}"));
+            emit_bridge_status(app_handle, &manager);
         }
     }
 }
@@ -385,6 +394,8 @@ pub fn run() -> Result<()> {
         }))
         .manage(manager.clone())
         .setup(move |app| {
+            settings::prepare_app_for_window(app.handle());
+
             let menu = tray::build_tray_menu(app, false)?;
             let icon = app
                 .default_window_icon()
@@ -401,13 +412,35 @@ pub fn run() -> Result<()> {
                         handle_menu_event(&app, event).await;
                     });
                 })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle().clone();
+                        let _ = settings::open_welcome(&app);
+                    }
+                })
                 .build(app)?;
 
             let app_handle = app.handle().clone();
             let manager = manager.clone();
-            tauri::async_runtime::spawn(async move {
-                bootstrap(&app_handle, manager).await;
-            });
+            let onboarding_done = !prefs::needs_onboarding(manager.config_dir()).unwrap_or(true)
+                && bridge::config_exists(&manager.config_path());
+
+            tracing::info!("opening welcome window");
+            if let Err(err) = settings::open_welcome(&app_handle) {
+                tracing::error!(error = %err, "failed to open welcome window");
+                let _ = settings::open_settings(&app_handle);
+            }
+
+            if onboarding_done {
+                tauri::async_runtime::spawn(async move {
+                    bootstrap_existing(&app_handle, manager).await;
+                });
+            }
 
             Ok(())
         })
@@ -434,10 +467,32 @@ pub fn run() -> Result<()> {
             codex_usage_hint,
             copy_codex_hint,
             open_welcome,
+            open_settings,
         ])
         .build(tauri::generate_context!())
         .context("failed to build Tauri application")?
         .run(|app_handle, event| {
+            if let tauri::RunEvent::WindowEvent { label, event, .. } = &event
+                && label == settings::SETTINGS_LABEL
+            {
+                match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        if let Some(window) = app_handle.get_webview_window(settings::SETTINGS_LABEL)
+                        {
+                            let _ = window.hide();
+                        }
+                        let _ = settings::open_welcome(app_handle);
+                        return;
+                    }
+                    tauri::WindowEvent::Destroyed => {
+                        let _ = settings::open_welcome(app_handle);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+
             if let tauri::RunEvent::ExitRequested { .. } = event
                 && let Some(manager) = app_handle.try_state::<Arc<BridgeManager>>()
             {

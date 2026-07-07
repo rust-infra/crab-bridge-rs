@@ -10,19 +10,34 @@ pub fn open_settings(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn open_welcome(app: &AppHandle) -> tauri::Result<()> {
+    prepare_app_for_window(app);
     open_window(app, WELCOME_LABEL, "Welcome to CrabBridge", "welcome.html", 560.0, 760.0)
 }
 
 pub fn focus_existing_window(app: &AppHandle) {
+    prepare_app_for_window(app);
     if let Some(window) = app.get_webview_window(WELCOME_LABEL) {
         let _ = window.show();
+        let _ = window.unminimize();
         let _ = window.set_focus();
         return;
     }
     if let Some(window) = app.get_webview_window(SETTINGS_LABEL) {
         let _ = window.show();
+        let _ = window.unminimize();
         let _ = window.set_focus();
+        return;
     }
+    let _ = open_welcome(app);
+}
+
+pub fn prepare_app_for_window(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::ActivationPolicy;
+        let _ = app.set_activation_policy(ActivationPolicy::Regular);
+    }
+    let _ = app.show();
 }
 
 fn open_window(
@@ -35,14 +50,20 @@ fn open_window(
 ) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(label) {
         window.show()?;
+        window.unminimize()?;
         window.set_focus()?;
         return Ok(());
     }
 
-    WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
         .title(title)
         .inner_size(width, height)
         .resizable(true)
+        .visible(true)
+        .center()
+        .focused(true)
         .build()?;
+    window.show()?;
+    window.set_focus()?;
     Ok(())
 }
