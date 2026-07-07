@@ -25,6 +25,7 @@ Legacy `/v1/*` routes still work and map to `default_provider`.
 - **Session persistence** — SQLite-backed history keyed by `response_id` for `previous_response_id` continuity
 - **Optional cache & rate limiting** — moka response cache, global RPS limit
 - **Codex config generator** — `crabridge-cli setup` / `print-codex-config` output ready-to-paste Codex snippets
+- **Desktop tray app** — Tauri 2 GUI with Welcome (setup wizard) and Settings, embedded bridge lifecycle
 
 ## Requirements
 
@@ -256,9 +257,11 @@ crabridge-cli print-codex-config --all-providers
 
 All upstream-bound requests require `Authorization: Bearer <api_key>`. `/v1/chat/completions` is **not** exposed on the bridge.
 
-## Desktop MVP (macOS tray app)
+## Desktop app (Tauri 2 tray)
 
-The desktop app wraps the HTTP bridge in a menu-bar tray icon. On first launch it opens a **Quick Setup** wizard; after that it auto-starts the bridge when you log in (optional).
+Cross-platform **menu-bar / system-tray** app that embeds the HTTP bridge. UI windows: **Welcome** (home + first-run setup wizard) and **Settings** (API keys, autostart, logs). On first launch it opens **Quick Setup**; after onboarding the bridge restarts with the updated config (`onboarding_finish` / `bridge_restart` IPC).
+
+The tray icon is loaded programmatically from `icons/32x32.png` (not via `tauri.conf.json` `trayIcon`). If upstream API keys are missing from the environment, `crabridge-server` logs warnings at startup and on requests — Codex must still pass `Authorization: Bearer`.
 
 ### Run from source
 
@@ -270,7 +273,7 @@ cargo run --bin crabbridge-desktop
 
 1. **Provider Configuration** — select DeepSeek or Kimi, set Base URL, verify API key (masked from shell env when available), save.
 2. **Run Setup** — writes `~/.codex/config.toml`, model catalogs, and `~/.config/crabbridge/config.toml`.
-3. **Start Bridge & Finish** — starts the embedded bridge and marks onboarding complete.
+3. **Start Bridge & Finish** — restarts the embedded bridge with the new config and marks onboarding complete.
 
 Open Codex in your **usual terminal** (where API keys are already exported). The bridge listens at `http://127.0.0.1:11435` by default.
 
@@ -288,18 +291,28 @@ Open Codex in your **usual terminal** (where API keys are already exported). The
 ### Release bundle
 
 ```bash
-./scripts/build-desktop.sh   # .dmg (macOS), .AppImage (Linux), .msi (Windows)
+./scripts/build-desktop.sh
 ```
+
+Runs `cargo tauri build` (Tauri 2 — release mode is the default; do **not** pass `--release`). Bundle output is written under the workspace target directory: `target/release/bundle/` (or `$CARGO_TARGET_DIR/release/bundle/`). The script copies installers into `dist/desktop/`:
+
+| Platform | Artifacts in `dist/desktop/` |
+|----------|------------------------------|
+| macOS | `crabbridge-desktop-macos.dmg`, `CrabBridge.app`, optional `crabbridge-desktop-macos.app.tar.gz` |
+| Linux | `crabbridge-desktop-linux.AppImage`, `crabbridge-desktop-linux.deb` |
+| Windows | `crabbridge-desktop-windows.msi`, `crabbridge-desktop-windows-setup.exe` |
+
+Requires [tauri-cli](https://v2.tauri.app/) (`cargo install tauri-cli --locked`); the script installs it if missing.
 
 ## Development
 
 ```bash
-cargo build --workspace --release          # both binaries
+cargo build --workspace --release          # server + CLI + desktop
 cargo build --release --bin crabridge      # HTTP bridge only
 cargo build --release --bin crabridge-cli    # slim CLI (no axum/sqlite/moka)
 cargo run --bin crabbridge-desktop         # desktop tray app (Tauri)
 
-# Desktop release bundle (.dmg / .AppImage / .msi — requires tauri-cli)
+# Desktop release bundle (installers → dist/desktop/; requires tauri-cli)
 ./scripts/build-desktop.sh
 
 cargo test --workspace
@@ -363,6 +376,8 @@ crab-bridge-rs/
 │           ├── tray.rs           # system tray menu
 │           └── setup_wizard.rs   # Codex setup from desktop
 scripts/
+├── build-desktop.sh              # cargo tauri build → dist/desktop/
+├── generate-desktop-icons.py
 ├── install-macos.sh
 ├── install-linux.sh
 └── install-windows.ps1

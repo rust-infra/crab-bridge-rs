@@ -162,6 +162,11 @@
       await refreshSetup();
     });
 
+    byId("setup-back-home").addEventListener("click", async () => {
+      setView("home");
+      await refreshHome(invoke);
+    });
+
     byId("complete-setup").addEventListener("click", async () => {
       setMessage(tr("welcome.msg.applying"));
       try {

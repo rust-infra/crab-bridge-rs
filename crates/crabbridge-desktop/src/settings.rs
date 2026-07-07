@@ -14,6 +14,18 @@ pub fn open_welcome(app: &AppHandle) -> tauri::Result<()> {
     open_window(app, WELCOME_LABEL, "Welcome to CrabBridge", "welcome.html", 560.0, 760.0)
 }
 
+pub fn hide_window(app: &AppHandle, label: &str) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(label) {
+        window.hide()?;
+    }
+    Ok(())
+}
+
+pub fn back_to_home(app: &AppHandle) -> tauri::Result<()> {
+    open_welcome(app)?;
+    hide_window(app, SETTINGS_LABEL)
+}
+
 pub fn focus_existing_window(app: &AppHandle) {
     prepare_app_for_window(app);
     if let Some(window) = app.get_webview_window(WELCOME_LABEL) {

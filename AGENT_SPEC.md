@@ -51,6 +51,7 @@ Legacy `/v1/*` routes still work and map to `default_provider` from `crabbridge.
 | Errors | anyhow |
 | CORS | tower-http CorsLayer |
 | SSE parsing | eventsource-stream, async-stream |
+| Desktop GUI | Tauri 2 (tray-icon, shell plugin) |
 
 **Does not use** `async-openai`. Responses / Chat Completions types are defined in `crates/crabbridge-core/src/types.rs`.
 
@@ -58,7 +59,7 @@ Legacy `/v1/*` routes still work and map to `default_provider` from `crabbridge.
 
 ## 3. Project Structure
 
-Cargo **workspace** with three crates. Shared logic lives in `crabbridge-core`; CLI and server are separate binaries with independent dependency trees.
+Cargo **workspace** with four crates. Shared logic lives in `crabbridge-core`; CLI, server, and desktop are separate binaries with independent dependency trees.
 
 ```
 crab-bridge-rs/
@@ -104,9 +105,26 @@ crab-bridge-rs/
 │           ├── metrics.rs          # Runtime counters + Prometheus export
 │           ├── admin.rs            # /admin dashboard + /metrics handlers
 │           └── prompt.rs           # ResponsesSseParser (prompt subcommand streaming)
+│   └── crabbridge-desktop/        # crabbridge-desktop binary (Tauri 2 tray app)
+│       ├── tauri.conf.json
+│       ├── icons/                  # tray icon: 32x32.png (loaded in code, not trayIcon config)
+│       ├── static/
+│       │   ├── welcome.html        # Welcome window (home + setup wizard)
+│       │   └── settings.html       # Settings window
+│       └── src/
+│           ├── main.rs             # thin entry
+│           ├── lib.rs              # Tauri commands (bridge_restart, onboarding_finish, …)
+│           ├── bridge.rs           # embedded crabbridge-server lifecycle
+│           ├── tray.rs             # system tray menu + programmatic icon
+│           ├── onboarding.rs       # first-run wizard orchestration
+│           ├── settings.rs         # settings / welcome windows
+│           └── setup_wizard.rs     # Codex setup from desktop
+├── scripts/
+│   ├── build-desktop.sh            # cargo tauri build → dist/desktop/
+│   └── generate-desktop-icons.py
 ```
 
-**Crate dependencies**: `crabbridge-cli` → `crabbridge-core`; `crabbridge-server` → `crabbridge-core`. The CLI crate does not depend on axum, rusqlite, or moka.
+**Crate dependencies**: `crabbridge-cli` → `crabbridge-core`; `crabbridge-server` → `crabbridge-core`; `crabbridge-desktop` → `crabbridge-core`, `crabbridge-cli`, `crabbridge-server`. The CLI crate does not depend on axum, rusqlite, or moka.
 
 ---
 
@@ -129,7 +147,18 @@ crab-bridge-rs/
 | `setup --docker` | Read-only configuration check |
 | `print-codex-config` | Print Codex `config.toml` snippet(s) |
 
-**Global flags** (both binaries): `-c` / `--config PATH` (also `CRABRIDGE_CONFIG`).
+**`crabbridge-desktop`** (Tauri 2 tray app):
+
+| Surface | Description |
+|---------|-------------|
+| Welcome window | Home + first-run setup wizard (`welcome.html`) |
+| Settings window | API keys, autostart, logs, bridge controls (`settings.html`) |
+| Tray menu | Start/stop bridge, open admin, Quick Setup, Codex setup, config check |
+| IPC | `bridge_restart`, `onboarding_finish`, `bridge_start`/`bridge_stop`, secrets, provider config |
+
+Onboarding finish restarts the embedded bridge so new config takes effect. Tray icon is embedded from `icons/32x32.png` at runtime (not `tauri.conf.json` `trayIcon`). Missing upstream API keys produce `warn!` logs in `crabbridge-server` at startup (`serve.rs`) and per-request (`handlers.rs`).
+
+**Global flags** (CLI binaries): `-c` / `--config PATH` (also `CRABRIDGE_CONFIG`).
 
 **Setup flags**: `--provider deepseek\|kimi`, `--all-providers`, `--providers=kimi,deepseek`.
 
@@ -400,9 +429,19 @@ Switch providers in Codex by changing `model_provider` and `model`.
 ```bash
 cargo build --workspace --release
 cargo run --bin crabridge -- serve
+cargo run --bin crabbridge-desktop         # desktop tray app (dev)
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
 ```
+
+**Desktop release bundle** (`./scripts/build-desktop.sh`):
+
+- Runs `cargo tauri build` from `crates/crabbridge-desktop` (Tauri 2 defaults to release; do not pass `--release`).
+- Bundle output: `target/release/bundle/` at workspace root (or `$CARGO_TARGET_DIR/release/bundle/`).
+- Staged installers: `dist/desktop/` — macOS `.dmg` + `CrabBridge.app`, Linux `.AppImage`/`.deb`, Windows `.msi`/`.exe`.
+- DMG copied from `bundle/dmg/`, excluding temporary `rw.*.dmg` files.
+
+**Cross-platform CLI/server binaries**: `./build-release.sh` → `dist/` (not desktop GUI).
 
 ---
 

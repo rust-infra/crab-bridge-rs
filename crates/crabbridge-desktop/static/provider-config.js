@@ -103,7 +103,7 @@
       if (!request) return null;
       const snapshot = await invoke("provider_config_save", { request });
       renderProviderList(snapshot);
-      await invoke("bridge_start");
+      await invoke("bridge_restart");
       setMessage(tr("provider.msg.saved_started", { label: snapshot.selected.label }));
       return snapshot;
     }

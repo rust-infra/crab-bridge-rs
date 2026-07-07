@@ -14,7 +14,7 @@ use tower_governor::{
     GovernorLayer, governor::GovernorConfigBuilder, key_extractor::GlobalKeyExtractor,
 };
 use tower_http::cors::CorsLayer;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::app::build_router;
@@ -25,7 +25,7 @@ use crate::session::{DEFAULT_MAX_SESSION_BYTES, SessionStore};
 use crate::state::{AppState, ProviderRuntime};
 use crate::upstream_request::UpstreamRequestConfig;
 use crabbridge_core::config::{
-    admin_enabled, load_config_file, resolve_config_path, resolve_serve_providers,
+    admin_enabled, load_config_file, resolve_api_key, resolve_config_path, resolve_serve_providers,
     validate_upstream_url,
 };
 use crabbridge_core::provider::ProviderKind;
@@ -44,6 +44,16 @@ impl ServeHandle {
 
     pub fn health_url(&self) -> String {
         format!("http://{}/health", self.bind_addr)
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.join.is_finished()
+    }
+
+    /// Collect the server task result after an unexpected exit.
+    pub async fn take_join_result(mut self) -> Result<()> {
+        self.shutdown.take();
+        self.join.await.context("bridge server task panicked")?
     }
 
     /// Stop the server and wait for the background task to finish.
@@ -126,6 +136,13 @@ pub async fn start_serve(
             })
             .unwrap_or_else(|| kind.default_base_url().to_string());
         let upstream = validate_upstream_url(&base_url)?;
+        if resolve_api_key(slug, kind, None).is_none() {
+            warn!(
+                provider = %slug,
+                env_key = kind.codex_env_key(),
+                "no API key in environment; Codex must pass Authorization: Bearer on each request"
+            );
+        }
         providers.insert(
             slug.clone(),
             ProviderRuntime {

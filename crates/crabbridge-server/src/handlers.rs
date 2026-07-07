@@ -57,6 +57,28 @@ fn upstream_api_key(headers: &HeaderMap) -> Option<Arc<String>> {
     bearer_token_from_headers(headers).map(Arc::new)
 }
 
+fn warn_missing_api_key(provider: &str, route: &str) {
+    let kind = ProviderKind::from_route(provider).unwrap_or(ProviderKind::Custom);
+    warn!(
+        provider,
+        route,
+        env_key = kind.codex_env_key(),
+        "missing upstream API key — pass Authorization: Bearer or set env_key in shell"
+    );
+}
+
+fn upstream_api_key_or_warn(
+    headers: &HeaderMap,
+    provider: &str,
+    route: &str,
+) -> Option<Arc<String>> {
+    let key = upstream_api_key(headers);
+    if key.is_none() {
+        warn_missing_api_key(provider, route);
+    }
+    key
+}
+
 pub async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
 }
@@ -116,7 +138,7 @@ async fn handle_models_inner(state: AppState, provider: &str, headers: &HeaderMa
     };
     info!(provider, "GET /{provider}/v1/models");
     let kind = ProviderKind::from_route(provider).unwrap_or(ProviderKind::Custom);
-    let api_key = upstream_api_key(headers).unwrap_or_default();
+    let api_key = upstream_api_key_or_warn(headers, provider, "models").unwrap_or_default();
     let url = format!("{}models", join_upstream_base(&runtime.upstream));
     let builder = apply_upstream_headers(state.client.get(&url), kind, api_key.as_str());
 
@@ -340,7 +362,7 @@ async fn handle_responses_inner(
         summarize_debug_names(chat_tool_debug_names(&chat_req.tools))
     );
     let url = format!("{}chat/completions", join_upstream_base(&runtime.upstream));
-    let Some(api_key) = upstream_api_key(headers) else {
+    let Some(api_key) = upstream_api_key_or_warn(headers, provider, "responses") else {
         let response = (
             StatusCode::UNAUTHORIZED,
             "missing Authorization: Bearer token (set Codex env_key in shell)",

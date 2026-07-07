@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DESKTOP_DIR="${ROOT}/crates/crabbridge-desktop"
 DIST_DIR="${ROOT}/dist/desktop"
+TARGET_DIR="${CARGO_TARGET_DIR:-"${ROOT}/target"}"
+BUNDLE_DIR="${TARGET_DIR}/release/bundle"
 
 log() { echo "[build-desktop] $*"; }
 
@@ -17,24 +19,57 @@ python3 "${ROOT}/scripts/generate-desktop-icons.py"
 log "building CrabBridge desktop bundle"
 (
   cd "${DESKTOP_DIR}"
-  cargo tauri build --release
+  cargo tauri build
 )
 
 mkdir -p "${DIST_DIR}"
+
+copy_dmg() {
+  local dest_name="$1"
+  local found=""
+
+  if [[ -d "${BUNDLE_DIR}/dmg" ]]; then
+    found="$(find "${BUNDLE_DIR}/dmg" -maxdepth 1 -name "*.dmg" ! -name "rw.*" -print -quit 2>/dev/null || true)"
+  fi
+  if [[ -z "${found}" && -d "${BUNDLE_DIR}" ]]; then
+    found="$(find "${BUNDLE_DIR}" -name "*.dmg" ! -name "rw.*" -print -quit 2>/dev/null || true)"
+  fi
+  if [[ -n "${found}" ]]; then
+    cp "${found}" "${DIST_DIR}/${dest_name}"
+    log "copied ${dest_name} from ${found}"
+  fi
+}
 
 copy_bundle() {
   local pattern="$1"
   local dest_name="$2"
   local found
-  found="$(find "${DESKTOP_DIR}/target/release/bundle" -name "${pattern}" -print -quit || true)"
+  if [[ ! -d "${BUNDLE_DIR}" ]]; then
+    log "bundle directory not found: ${BUNDLE_DIR}"
+    return 0
+  fi
+  found="$(find "${BUNDLE_DIR}" -name "${pattern}" -print -quit 2>/dev/null || true)"
   if [[ -n "${found}" ]]; then
     cp "${found}" "${DIST_DIR}/${dest_name}"
-    log "copied ${dest_name}"
+    log "copied ${dest_name} from ${found}"
+  fi
+}
+
+copy_app_bundle() {
+  local app_path=""
+  if [[ -d "${BUNDLE_DIR}/macos" ]]; then
+    app_path="$(find "${BUNDLE_DIR}/macos" -maxdepth 1 -name "*.app" -print -quit 2>/dev/null || true)"
+  fi
+  if [[ -n "${app_path}" ]]; then
+    rm -rf "${DIST_DIR}/CrabBridge.app"
+    cp -R "${app_path}" "${DIST_DIR}/CrabBridge.app"
+    log "copied CrabBridge.app from ${app_path}"
   fi
 }
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  copy_bundle "*.dmg" "crabbridge-desktop-macos.dmg"
+  copy_dmg "crabbridge-desktop-macos.dmg"
+  copy_app_bundle
   copy_bundle "*.app.tar.gz" "crabbridge-desktop-macos.app.tar.gz"
 elif [[ "$(uname -s)" == "Linux" ]]; then
   copy_bundle "*.AppImage" "crabbridge-desktop-linux.AppImage"

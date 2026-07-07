@@ -9,7 +9,7 @@
       "settings.back_home": "Back to Home",
       "settings.language": "Language",
       "settings.theme": "Theme",
-      "settings.theme_note": "Theme and language preferences apply to the desktop app UI.",
+      "settings.theme_note": "Theme and language apply instantly across open windows.",
       "settings.startup": "Startup",
       "settings.launch_login": "Launch CrabBridge at login",
       "settings.logs": "Logs",
@@ -72,7 +72,7 @@
       "settings.back_home": "返回首页",
       "settings.language": "语言",
       "settings.theme": "外观",
-      "settings.theme_note": "主题和语言会应用到桌面应用界面。",
+      "settings.theme_note": "主题和语言会立即应用到所有已打开的窗口。",
       "settings.startup": "启动",
       "settings.launch_login": "登录时自动启动 CrabBridge",
       "settings.logs": "日志",
@@ -172,12 +172,48 @@
     });
   }
 
+  function refresh() {
+    applyTheme(getTheme());
+    applyI18n();
+  }
+
   function emitChange() {
     window.dispatchEvent(
       new CustomEvent("crabbridge:prefs-changed", {
         detail: { lang: getLang(), theme: getTheme() }
       })
     );
+    const emit = window.__TAURI__?.event?.emit;
+    if (emit) {
+      emit("appearance-changed", { lang: getLang(), theme: getTheme() }).catch(() => {});
+    }
+  }
+
+  function watchSystemTheme() {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => {
+      if (getTheme() === "system") {
+        applyTheme("system");
+      }
+    };
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", onChange);
+    } else if (typeof media.addListener === "function") {
+      media.addListener(onChange);
+    }
+  }
+
+  function bindSyncListeners() {
+    window.addEventListener("storage", (event) => {
+      if (event.key === LANG_KEY || event.key === THEME_KEY) {
+        refresh();
+      }
+    });
+    window.addEventListener("focus", refresh);
+    const listen = window.__TAURI__?.event?.listen;
+    if (listen) {
+      listen("appearance-changed", refresh).catch(() => {});
+    }
   }
 
   function setLang(lang) {
@@ -193,13 +229,15 @@
   }
 
   function init() {
-    applyTheme(getTheme());
-    applyI18n();
+    refresh();
+    watchSystemTheme();
+    bindSyncListeners();
   }
 
   window.CrabUi = {
     t,
     init,
+    refresh,
     applyI18n,
     getLang,
     getTheme,

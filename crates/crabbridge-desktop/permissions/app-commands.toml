@@ -5,6 +5,7 @@ commands.allow = [
   "bridge_status",
   "bridge_start",
   "bridge_stop",
+  "bridge_restart",
   "bridge_open_admin",
   "bridge_run_setup",
   "secrets_status",
@@ -24,5 +25,6 @@ commands.allow = [
   "codex_usage_hint",
   "copy_codex_hint",
   "open_welcome",
+  "back_to_home",
   "open_settings",
 ]

@@ -2,7 +2,8 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use crabbridge_core::config::{load_config_file, user_config_path};
@@ -26,11 +27,11 @@ struct BridgeInner {
     handle: Option<ServeHandle>,
     last_error: Option<String>,
     config_path: PathBuf,
-    bind_addr: SocketAddr,
+    default_bind_addr: SocketAddr,
 }
 
 impl BridgeManager {
-    pub fn new(config_path: PathBuf, bind_addr: SocketAddr) -> Result<Self> {
+    pub fn new(config_path: PathBuf, default_bind_addr: SocketAddr) -> Result<Self> {
         let config_dir = config_path
             .parent()
             .context("config path must have a parent directory")?
@@ -40,7 +41,7 @@ impl BridgeManager {
                 handle: None,
                 last_error: None,
                 config_path,
-                bind_addr,
+                default_bind_addr,
             }),
             config_dir,
         })
@@ -62,7 +63,11 @@ impl BridgeManager {
     }
 
     pub fn bind_addr(&self) -> SocketAddr {
-        self.inner.lock().expect("bridge manager lock").bind_addr
+        let inner = self.inner.lock().expect("bridge manager lock");
+        if let Some(handle) = inner.handle.as_ref() {
+            return handle.bind_addr;
+        }
+        resolve_bind_addr(&inner.config_path, inner.default_bind_addr)
     }
 
     pub fn config_path(&self) -> PathBuf {
@@ -87,15 +92,15 @@ impl BridgeManager {
     }
 
     pub async fn start(&self) -> Result<()> {
-        let (config_path, bind_addr) = {
+        let (config_path, default_bind_addr) = {
             let inner = self.inner.lock().expect("bridge manager lock");
             if inner.handle.is_some() {
                 bail!("bridge is already running");
             }
-            (inner.config_path.clone(), inner.bind_addr)
+            (inner.config_path.clone(), inner.default_bind_addr)
         };
 
-        let serve = serve_args_for_desktop(&config_path, bind_addr)?;
+        let serve = serve_args_for_desktop(&config_path, default_bind_addr)?;
         crate::secrets::hydrate_api_keys()?;
 
         match crabbridge_server::serve::start_serve(serve, Some(config_path), false).await {
@@ -113,6 +118,13 @@ impl BridgeManager {
         }
     }
 
+    pub async fn restart(&self) -> Result<()> {
+        if self.status() == BridgeStatus::Running {
+            self.stop().await?;
+        }
+        self.start().await
+    }
+
     pub async fn stop(&self) -> Result<()> {
         let handle = {
             let mut inner = self.inner.lock().expect("bridge manager lock");
@@ -124,6 +136,51 @@ impl BridgeManager {
             inner.last_error = None;
         }
         result
+    }
+
+    pub fn spawn_exit_monitor(self: &Arc<Self>, notify: Arc<dyn Fn() + Send + Sync>) {
+        let manager = Arc::clone(self);
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(err) => {
+                    tracing::error!(error = %err, "failed to start bridge exit monitor");
+                    return;
+                }
+            };
+            rt.block_on(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    let handle = {
+                        let mut inner = manager.inner.lock().expect("bridge manager lock");
+                        if let Some(handle) = inner.handle.as_ref() {
+                            if handle.is_finished() {
+                                inner.handle.take()
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+                    let Some(handle) = handle else {
+                        continue;
+                    };
+                    let exit_result = handle.take_join_result().await;
+                    {
+                        let mut inner = manager.inner.lock().expect("bridge manager lock");
+                        inner.last_error = exit_result
+                            .as_ref()
+                            .err()
+                            .map(|err| err.to_string());
+                    }
+                    notify();
+                }
+            });
+        });
     }
 }
 
@@ -141,6 +198,19 @@ pub fn ensure_config_parent(path: &Path) -> Result<()> {
 
 pub fn config_exists(path: &Path) -> bool {
     path.is_file()
+}
+
+fn resolve_bind_addr(config_path: &Path, default_bind_addr: SocketAddr) -> SocketAddr {
+    serve_args_for_desktop(config_path, default_bind_addr)
+        .map(|args| args.bind_addr)
+        .unwrap_or_else(|err| {
+            tracing::warn!(
+                error = %err,
+                config = %config_path.display(),
+                "using default bind address"
+            );
+            default_bind_addr
+        })
 }
 
 pub fn serve_args_for_desktop(config_path: &Path, bind_addr: SocketAddr) -> Result<ServeArgs> {

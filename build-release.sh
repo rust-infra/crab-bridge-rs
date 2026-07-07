@@ -3,6 +3,8 @@ set -euo pipefail
 
 # 独立跨平台打包脚本：支持 macOS / Linux / Windows
 # 依赖：Rust、rustup、cargo-zigbuild（脚本会自动提示安装）
+# 产物：crabridge + crabridge-cli 独立二进制 → dist/
+# 桌面 GUI 安装包请使用：./scripts/build-desktop.sh → dist/desktop/
 
 SERVER_BIN="crabridge"
 CLI_BIN="crabridge-cli"

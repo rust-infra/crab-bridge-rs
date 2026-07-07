@@ -18,12 +18,12 @@
   <section class="card">
     <h2 data-i18n="settings.theme">Theme</h2>
     <label class="field-label" for="lang-select" data-i18n="settings.language">Language</label>
-    <select id="lang-select" style="width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text); margin-bottom: 10px;">
+    <select id="lang-select" class="pref-select">
       <option value="en" data-i18n="settings.lang.en">English</option>
       <option value="zh" data-i18n="settings.lang.zh">简体中文</option>
     </select>
     <label class="field-label" for="theme-select" data-i18n="settings.theme">Theme</label>
-    <select id="theme-select" style="width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text);">
+    <select id="theme-select" class="pref-select">
       <option value="system" data-i18n="settings.theme.system">Follow system</option>
       <option value="light" data-i18n="settings.theme.light">Light</option>
       <option value="dark" data-i18n="settings.theme.dark">Dark</option>
@@ -108,11 +108,7 @@
       });
 
       document.getElementById("open-welcome").addEventListener("click", async () => {
-        await invoke("open_welcome");
-        const current = window.__TAURI__?.window?.getCurrentWindow?.();
-        if (current) {
-          await current.close();
-        }
+        await invoke("back_to_home");
       });
 
       await refreshAutostart();

@@ -56,9 +56,10 @@ pub async fn finish_onboarding(
     config_dir: &Path,
     manager: Arc<BridgeManager>,
 ) -> Result<OnboardingStatus> {
-    if manager.status() != crate::bridge::BridgeStatus::Running {
-        manager.start().await.context("failed to start bridge")?;
-    }
+    manager
+        .restart()
+        .await
+        .context("failed to restart bridge with updated configuration")?;
     prefs::mark_onboarding_complete(config_dir)?;
     status(
         config_dir,
