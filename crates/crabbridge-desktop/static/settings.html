@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CrabBridge Settings</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111827;
+      --panel: #1f2937;
+      --text: #f3f4f6;
+      --muted: #9ca3af;
+      --accent: #f97316;
+      --ok: #22c55e;
+      --warn: #eab308;
+      --fail: #ef4444;
+      --border: #374151;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 20px;
+    }
+    h1 { margin: 0 0 6px; font-size: 1.35rem; }
+    p.lead { margin: 0 0 18px; color: var(--muted); font-size: 0.95rem; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    h2 { margin: 0 0 12px; font-size: 1rem; }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+    input[type="password"], input[type="text"] {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0f172a;
+      color: var(--text);
+      margin-bottom: 10px;
+    }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 9px 14px;
+      background: var(--accent);
+      color: #111827;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary { background: #374151; color: var(--text); }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .status-pill {
+      display: inline-block;
+      font-size: 0.75rem;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #374151;
+      color: var(--muted);
+    }
+    .status-pill.ok { background: rgba(34,197,94,0.15); color: var(--ok); }
+    .checks { list-style: none; padding: 0; margin: 0; }
+    .checks li {
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.9rem;
+    }
+    .checks li:last-child { border-bottom: 0; }
+    .checks .label { font-weight: 600; }
+    .checks .detail { color: var(--muted); font-size: 0.82rem; margin-top: 2px; }
+    .checks .ok { color: var(--ok); }
+    .checks .warn { color: var(--warn); }
+    .checks .fail { color: var(--fail); }
+    #checks { min-height: 1.2rem; color: var(--muted); font-size: 0.85rem; margin-top: 8px; }
+    pre.logs {
+      margin: 0;
+      padding: 12px;
+      border-radius: 8px;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      max-height: 220px;
+      overflow: auto;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    #message { min-height: 1.2rem; color: var(--muted); font-size: 0.85rem; margin-top: 8px; }
+    .provider-list { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+    .provider-chip {
+      border: 1px solid var(--border);
+      background: #0f172a;
+      color: var(--text);
+      border-radius: 999px;
+      padding: 8px 14px;
+      cursor: pointer;
+      font-size: 0.88rem;
+    }
+    .provider-chip.active {
+      border-color: var(--accent);
+      background: rgba(249,115,22,0.15);
+      color: #fdba74;
+      font-weight: 700;
+    }
+    .provider-chip.configured:not(.active)::after {
+      content: " •";
+      color: var(--ok);
+    }
+    input[readonly].masked {
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .field-hint { font-size: 0.78rem; color: var(--muted); margin: -4px 0 10px; }
+  </style>
+</head>
+<body>
+  <h1>CrabBridge Settings</h1>
+  <p class="lead">Configure upstream providers, bridge controls, and desktop preferences.</p>
+
+  <section>
+    <h2>Bridge</h2>
+    <div class="row">
+      <span id="bridge-status" class="status-pill">unknown</span>
+      <button id="bridge-start">Start</button>
+      <button class="secondary" id="bridge-stop">Stop</button>
+      <button class="secondary" id="bridge-admin">Admin</button>
+      <button class="secondary" id="open-welcome">Quick Setup…</button>
+    </div>
+    <p class="lead" id="bridge-meta" style="margin-top: 10px;"></p>
+  </section>
+
+  <section>
+    <h2>Provider Configuration</h2>
+    <p class="lead" style="margin-bottom: 12px;">Select a provider to edit. The active provider is highlighted. Settings are saved to <code>provider-settings.json</code> and synced into <code>config.toml</code>.</p>
+    <div id="provider-list" class="provider-list"></div>
+
+    <label for="provider-base-url">Base URL</label>
+    <input id="provider-base-url" type="text" placeholder="https://api.deepseek.com/v1" autocomplete="off" />
+    <p class="field-hint" id="provider-default-url"></p>
+
+    <label for="provider-api-key">API Key (<span id="provider-env-key"></span>)</label>
+    <input id="provider-api-key" type="password" placeholder="Paste API key if not in shell env" autocomplete="off" />
+    <p class="field-hint" id="provider-key-hint"></p>
+
+    <label><input type="checkbox" id="provider-set-active" /> Set as default provider</label>
+
+    <div class="row" style="margin-top: 12px;">
+      <button id="provider-save">Save Provider</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Startup</h2>
+    <label><input type="checkbox" id="autostart" /> Launch CrabBridge at login</label>
+  </section>
+
+  <section>
+    <h2>Configuration Check</h2>
+    <div class="row">
+      <button id="run-check">Run Check</button>
+      <span id="check-summary" class="status-pill">not run</span>
+    </div>
+    <ul id="checks" class="checks"></ul>
+  </section>
+
+  <section>
+    <h2>Logs</h2>
+    <div class="row">
+      <button id="refresh-logs">Refresh</button>
+      <button class="secondary" id="reveal-logs">Reveal Log File</button>
+    </div>
+    <p class="lead" id="log-path" style="margin: 10px 0 8px;"></p>
+    <pre id="log-lines" class="logs">Loading…</pre>
+  </section>
+
+  <div id="message"></div>
+
+  <script>
+    const invoke = window.__TAURI__.core.invoke;
+
+    function setMessage(text) {
+      document.getElementById("message").textContent = text || "";
+    }
+
+    function statusClass(status) {
+      if (status === "ok") return "ok";
+      if (status === "warn") return "warn";
+      return "fail";
+    }
+
+    let providerSnapshot = null;
+    let selectedSlug = null;
+
+    function renderProviderForm(selected) {
+      document.getElementById("provider-base-url").value = selected.base_url || "";
+      document.getElementById("provider-default-url").textContent =
+        `Default: ${selected.default_base_url}`;
+      document.getElementById("provider-env-key").textContent = selected.env_key;
+
+      const keyInput = document.getElementById("provider-api-key");
+      const keyHint = document.getElementById("provider-key-hint");
+      if (selected.api_key_available && selected.api_key_masked) {
+        keyInput.value = selected.api_key_masked;
+        keyInput.readOnly = true;
+        keyInput.classList.add("masked");
+        keyInput.type = "text";
+        keyHint.textContent =
+          selected.api_key_source === "env"
+            ? "Loaded from shell environment — Codex uses the same variable."
+            : "Loaded from keychain fallback.";
+      } else {
+        keyInput.value = "";
+        keyInput.readOnly = false;
+        keyInput.classList.remove("masked");
+        keyInput.type = "password";
+        keyInput.placeholder = `Export ${selected.env_key} in shell, or paste here to store in keychain`;
+        keyHint.textContent = "Leave empty to keep using shell env only.";
+      }
+
+      document.getElementById("provider-set-active").checked = selected.is_active;
+    }
+
+    function renderProviderList(snapshot) {
+      providerSnapshot = snapshot;
+      selectedSlug = snapshot.selected.slug;
+      const container = document.getElementById("provider-list");
+      container.innerHTML = "";
+      for (const item of snapshot.providers) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "provider-chip" +
+          (item.is_active ? " active" : "") +
+          (item.configured ? " configured" : "");
+        btn.textContent = item.label + (item.is_active ? " (active)" : "");
+        btn.addEventListener("click", async () => {
+          const next = await invoke("provider_config_get", { slug: item.slug });
+          renderProviderList(next);
+        });
+        container.appendChild(btn);
+      }
+      renderProviderForm(snapshot.selected);
+    }
+
+    async function refreshProviderConfig() {
+      const snapshot = await invoke("provider_config_get", { slug: selectedSlug });
+      renderProviderList(snapshot);
+    }
+
+    document.getElementById("provider-save").addEventListener("click", async () => {
+      const selected = providerSnapshot?.selected;
+      if (!selected) return;
+      const apiKeyInput = document.getElementById("provider-api-key");
+      const request = {
+        slug: selected.slug,
+        baseUrl: document.getElementById("provider-base-url").value.trim(),
+        setActive: document.getElementById("provider-set-active").checked,
+        apiKey: apiKeyInput.readOnly ? null : apiKeyInput.value.trim() || null,
+      };
+      try {
+        const snapshot = await invoke("provider_config_save", { request });
+        renderProviderList(snapshot);
+        setMessage(`Saved ${selected.label} configuration`);
+      } catch (err) {
+        setMessage(String(err));
+      }
+    });
+
+    async function refreshAutostart() {
+      const enabled = await invoke("autostart_get");
+      document.getElementById("autostart").checked = enabled;
+    }
+
+    document.getElementById("autostart").addEventListener("change", async (event) => {
+      await invoke("autostart_set", { enabled: event.target.checked });
+      setMessage(event.target.checked ? "Launch at login enabled" : "Launch at login disabled");
+    });
+
+    document.getElementById("run-check").addEventListener("click", async () => {
+      setMessage("Running configuration check...");
+      const report = await invoke("config_check");
+      const summary = document.getElementById("check-summary");
+      const list = document.getElementById("checks");
+      list.innerHTML = "";
+      const failures = report.checks.filter((c) => c.status === "fail").length;
+      const warnings = report.checks.filter((c) => c.status === "warn").length;
+      summary.textContent = failures ? `${failures} failed` : warnings ? `${warnings} warnings` : "all ok";
+      summary.className = "status-pill " + (failures ? "fail" : warnings ? "warn" : "ok");
+      for (const check of report.checks) {
+        const li = document.createElement("li");
+        li.innerHTML = `
+          <div class="label ${statusClass(check.status)}">${check.label}</div>
+          <div class="detail">${check.detail}</div>
+        `;
+        list.appendChild(li);
+      }
+      setMessage("");
+    });
+
+    async function refreshLogs() {
+      const snapshot = await invoke("logs_tail", { limit: 200 });
+      document.getElementById("log-path").textContent = snapshot.path;
+      document.getElementById("log-lines").textContent =
+        snapshot.lines.length ? snapshot.lines.join("\n") : "(no log lines yet)";
+    }
+
+    document.getElementById("refresh-logs").addEventListener("click", refreshLogs);
+    document.getElementById("reveal-logs").addEventListener("click", async () => {
+      await invoke("logs_reveal");
+    });
+
+    async function refreshBridge() {
+      const status = await invoke("bridge_status");
+      const pill = document.getElementById("bridge-status");
+      pill.textContent = status.status;
+      pill.className = "status-pill " + (status.status === "running" ? "ok" : "");
+      document.getElementById("bridge-meta").textContent =
+        `Config: ${status.config_path} · Bind: ${status.bind_addr}` +
+        (status.admin_url ? ` · ${status.admin_url}` : "");
+    }
+
+    document.getElementById("bridge-start").addEventListener("click", async () => {
+      await invoke("bridge_start");
+      setMessage("Bridge started");
+      await refreshBridge();
+    });
+    document.getElementById("bridge-stop").addEventListener("click", async () => {
+      await invoke("bridge_stop");
+      setMessage("Bridge stopped");
+      await refreshBridge();
+    });
+    document.getElementById("bridge-admin").addEventListener("click", async () => {
+      await invoke("bridge_open_admin");
+    });
+    document.getElementById("open-welcome").addEventListener("click", async () => {
+      await invoke("open_welcome");
+    });
+
+    refreshProviderConfig();
+    refreshAutostart();
+    refreshLogs();
+    refreshBridge();
+  </script>
+</body>
+</html>

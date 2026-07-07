@@ -4,6 +4,7 @@ members = [
     "crates/crabbridge-core",
     "crates/crabbridge-cli",
     "crates/crabbridge-server",
+    "crates/crabbridge-desktop",
 ]
 
 [workspace.package]
@@ -37,6 +38,11 @@ http-body-util = "0.1"
 crabbridge-core = { path = "crates/crabbridge-core" }
 crabbridge-cli = { path = "crates/crabbridge-cli" }
 crabbridge-server = { path = "crates/crabbridge-server" }
+crabbridge-desktop = { path = "crates/crabbridge-desktop" }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-build = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+open = "5"
 
 [profile.release]
 opt-level = "z"

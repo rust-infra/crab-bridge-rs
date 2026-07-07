@@ -1,0 +1,41 @@
+[package]
+name = "crabbridge-desktop"
+version.workspace = true
+edition.workspace = true
+description = "CrabBridge desktop tray app"
+default-run = "crabbridge-desktop"
+
+[lib]
+name = "crabbridge_desktop"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "crabbridge-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow.workspace = true
+crabbridge-cli.workspace = true
+crabbridge-core.workspace = true
+crabbridge-server.workspace = true
+keyring = "3"
+open = "5"
+serde.workspace = true
+serde_json.workspace = true
+toml_edit.workspace = true
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-single-instance = "2"
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "registry"] }
+arboard = "3"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

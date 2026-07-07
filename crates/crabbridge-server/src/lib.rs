@@ -7,6 +7,7 @@ pub mod handlers;
 pub mod metrics;
 pub mod opts;
 pub mod prompt;
+pub mod serve;
 pub mod server;
 pub mod session;
 pub(crate) mod session_sqlite;

@@ -256,12 +256,52 @@ crabridge-cli print-codex-config --all-providers
 
 All upstream-bound requests require `Authorization: Bearer <api_key>`. `/v1/chat/completions` is **not** exposed on the bridge.
 
+## Desktop MVP (macOS tray app)
+
+The desktop app wraps the HTTP bridge in a menu-bar tray icon. On first launch it opens a **Quick Setup** wizard; after that it auto-starts the bridge when you log in (optional).
+
+### Run from source
+
+```bash
+cargo run --bin crabbridge-desktop
+```
+
+### First-run flow
+
+1. **Environment** — CrabBridge reads `DEEPSEEK_API_KEY` / `KIMI_API_KEY` from your login shell (same vars Codex uses). No manual key entry in the wizard.
+2. **Run Setup** — writes `~/.codex/config.toml`, model catalogs, and `~/.config/crabbridge/config.toml`.
+3. **Start Bridge & Finish** — starts the embedded bridge and marks onboarding complete.
+
+Open Codex in your **usual terminal** (where API keys are already exported). The bridge listens at `http://127.0.0.1:11435` by default.
+
+### Tray menu
+
+| Item | Action |
+|------|--------|
+| Start / Stop Bridge | Control the embedded HTTP server |
+| Open Admin Dashboard | Opens `http://127.0.0.1:11435/admin` |
+| Quick Setup… | Re-open the onboarding wizard |
+| Run Codex Setup | Re-run CLI setup (config refresh) |
+| Check Configuration | Validates Codex + bridge config |
+| Settings… | API keys, autostart, logs, bridge controls |
+
+### Release bundle
+
+```bash
+./scripts/build-desktop.sh   # .dmg (macOS), .AppImage (Linux), .msi (Windows)
+```
+
 ## Development
 
 ```bash
 cargo build --workspace --release          # both binaries
 cargo build --release --bin crabridge      # HTTP bridge only
 cargo build --release --bin crabridge-cli    # slim CLI (no axum/sqlite/moka)
+cargo run --bin crabbridge-desktop         # desktop tray app (Tauri)
+
+# Desktop release bundle (.dmg / .AppImage / .msi — requires tauri-cli)
+./scripts/build-desktop.sh
+
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
 ```
@@ -292,6 +332,7 @@ crab-bridge-rs/
 │       ├── tests/integration.rs  # mockito integration tests
 │       └── src/
 │           ├── main.rs           # thin entry
+│           ├── serve.rs          # library API: start_serve / ServeHandle
 │           ├── server.rs         # serve / prompt handlers
 │           ├── opts.rs           # Clap for crabridge
 │           ├── app.rs            # Router construction
@@ -303,6 +344,24 @@ crab-bridge-rs/
 │           ├── session.rs        # Session store
 │           ├── session_sqlite.rs # SQLite persistence
 │           └── ...
+│   └── crabbridge-desktop/       # desktop tray app (crabbridge-desktop)
+│       ├── tauri.conf.json
+│       ├── icons/
+│       ├── static/settings.html  # settings window (API keys, autostart, checks)
+│       ├── static/welcome.html   # first-run onboarding wizard
+│       └── src/
+│           ├── main.rs           # thin entry
+│           ├── lib.rs            # tray + Tauri commands
+│           ├── bridge.rs         # embedded server lifecycle
+│           ├── onboarding.rs     # first-run wizard orchestration
+│           ├── prefs.rs          # desktop-prefs.json
+│           ├── env_export.rs     # env.sh + zsh hook
+│           ├── secrets.rs        # keychain API key storage
+│           ├── autostart.rs      # launch at login
+│           ├── health.rs         # configuration checks
+│           ├── settings.rs       # settings / welcome windows
+│           ├── tray.rs           # system tray menu
+│           └── setup_wizard.rs   # Codex setup from desktop
 scripts/
 ├── install-macos.sh
 ├── install-linux.sh

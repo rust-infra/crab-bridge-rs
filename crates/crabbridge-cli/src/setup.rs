@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use reqwest::{Client, Url};
+use serde::Serialize;
 use serde_json::Value;
 use toml_edit::{DocumentMut, Item, Table, value};
 use tracing::info;
@@ -19,21 +20,22 @@ use crabbridge_core::provider::ProviderKind;
 
 const LEGACY_PROVIDER_NAME: &str = "crabbridge";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CheckStatus {
     Ok,
     Warn,
     Fail,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ConfigCheck {
     pub label: String,
     pub status: CheckStatus,
     pub detail: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SetupCheckReport {
     pub checks: Vec<ConfigCheck>,
     pub in_docker: bool,
@@ -284,7 +286,7 @@ pub fn running_in_docker() -> bool {
         .unwrap_or(false)
 }
 
-pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport> {
+pub async fn collect_setup_check(opts: SetupCheckOptions) -> SetupCheckReport {
     let in_docker = running_in_docker();
     let mut checks = Vec::new();
 
@@ -305,8 +307,7 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
                 CheckStatus::Fail,
                 "could not resolve ~/.codex (set CODEX_HOME?)".into(),
             );
-            print_setup_check(&SetupCheckReport { checks, in_docker });
-            bail!("configuration check failed");
+            return SetupCheckReport { checks, in_docker };
         }
     };
 
@@ -328,8 +329,7 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
                 CheckStatus::Fail,
                 format!("{} ({e})", config_path.display()),
             );
-            print_setup_check(&SetupCheckReport { checks, in_docker });
-            bail!("configuration check failed");
+            return SetupCheckReport { checks, in_docker };
         }
     };
 
@@ -342,8 +342,7 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
                 CheckStatus::Fail,
                 e.to_string(),
             );
-            print_setup_check(&SetupCheckReport { checks, in_docker });
-            bail!("configuration check failed");
+            return SetupCheckReport { checks, in_docker };
         }
     };
 
@@ -577,7 +576,11 @@ pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport
         check_docker_url_hints(&mut checks, route_url, in_docker, slug);
     }
 
-    let report = SetupCheckReport { checks, in_docker };
+    SetupCheckReport { checks, in_docker }
+}
+
+pub async fn run_setup_check(opts: SetupCheckOptions) -> Result<SetupCheckReport> {
+    let report = collect_setup_check(opts).await;
     print_setup_check(&report);
 
     if report.has_failures() {

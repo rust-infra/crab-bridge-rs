@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Welcome to CrabBridge</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1220;
+      --panel: #162033;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #f97316;
+      --ok: #22c55e;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top, #1e293b, var(--bg));
+      color: var(--text);
+      padding: 24px;
+      min-height: 100vh;
+    }
+    h1 { margin: 0 0 8px; font-size: 1.6rem; }
+    .lead { color: var(--muted); margin: 0 0 20px; line-height: 1.5; }
+    .steps { display: grid; gap: 14px; }
+    .step {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+    }
+    .step h2 { margin: 0 0 8px; font-size: 1rem; }
+    .step p { margin: 0 0 10px; color: var(--muted); font-size: 0.92rem; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      background: var(--accent);
+      color: #111827;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.secondary { background: #334155; color: var(--text); font-weight: 600; }
+    button:disabled { opacity: 0.45; cursor: default; }
+    .status { font-size: 0.82rem; color: var(--muted); margin-top: 8px; }
+    .status.ok { color: var(--ok); }
+    pre.hint {
+      margin: 10px 0 0;
+      padding: 12px;
+      border-radius: 8px;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      white-space: pre-wrap;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      color: #cbd5e1;
+    }
+    #message { margin-top: 14px; min-height: 1rem; color: var(--muted); font-size: 0.88rem; }
+  </style>
+</head>
+<body>
+  <h1>Welcome to CrabBridge</h1>
+  <p class="lead">Connect Codex CLI to DeepSeek and Kimi through a local bridge. API keys stay in your shell — the same <code>DEEPSEEK_API_KEY</code> / <code>KIMI_API_KEY</code> Codex already uses.</p>
+
+  <div class="steps">
+    <section class="step">
+      <h2>1. Environment</h2>
+      <p>CrabBridge reads the same env vars as Codex. No keys are stored in the app unless you opt in via Settings.</p>
+      <div id="keys-status" class="status">Checking…</div>
+    </section>
+
+    <section class="step">
+      <h2>2. Configure Codex + Bridge</h2>
+      <p>Writes <code>~/.codex/config.toml</code>, model catalogs, and <code>~/.config/crabbridge/config.toml</code>.</p>
+      <div class="row">
+        <button id="run-setup">Run Setup</button>
+      </div>
+      <div id="setup-status" class="status"></div>
+    </section>
+
+    <section class="step">
+      <h2>3. Start Bridge</h2>
+      <p>Runs the local HTTP proxy Codex talks to. Codex sends your API key on each request — the bridge does not need its own copy at runtime.</p>
+      <div class="row">
+        <button id="finish">Start Bridge & Finish</button>
+        <button class="secondary" id="copy-hint">Copy Usage Hint</button>
+        <button class="secondary" id="open-admin">Open Admin</button>
+      </div>
+      <pre id="hint" class="hint">Finish setup to see connection details.</pre>
+    </section>
+  </div>
+
+  <div id="message"></div>
+
+  <script>
+    const invoke = window.__TAURI__.core.invoke;
+
+    function setMessage(text) {
+      document.getElementById("message").textContent = text || "";
+    }
+
+    async function refreshStatus() {
+      const status = await invoke("onboarding_status");
+      const keys = status.secrets || [];
+      const deepseek = keys.find((k) => k.env_key === "DEEPSEEK_API_KEY");
+      const kimi = keys.find((k) => k.env_key === "KIMI_API_KEY");
+      const deepseekLabel = deepseek?.available ? "detected" : "not found — export in ~/.zshrc first";
+      const kimiLabel = kimi?.available ? "detected" : "optional";
+      document.getElementById("keys-status").textContent =
+        `DEEPSEEK_API_KEY: ${deepseekLabel} · KIMI_API_KEY: ${kimiLabel}`;
+      document.getElementById("keys-status").className =
+        "status" + (deepseek?.available ? " ok" : "");
+      document.getElementById("setup-status").textContent =
+        status.bridge_config_exists ? "Bridge config ready" : "Setup not run yet";
+      document.getElementById("setup-status").className =
+        "status" + (status.bridge_config_exists ? " ok" : "");
+      if (status.bridge_running || status.bridge_config_exists) {
+        document.getElementById("hint").textContent = await invoke("codex_usage_hint");
+      }
+    }
+
+    document.getElementById("run-setup").addEventListener("click", async () => {
+      setMessage("Running setup...");
+      try {
+        const path = await invoke("onboarding_run_setup");
+        setMessage(`Setup complete. Env snapshot: ${path}`);
+        await refreshStatus();
+      } catch (err) {
+        setMessage(String(err));
+      }
+    });
+
+    document.getElementById("finish").addEventListener("click", async () => {
+      setMessage("Starting bridge...");
+      await invoke("onboarding_finish");
+      setMessage("CrabBridge is running. Open Codex in your usual terminal.");
+      await refreshStatus();
+    });
+
+    document.getElementById("copy-hint").addEventListener("click", async () => {
+      await invoke("copy_codex_hint");
+      setMessage("Usage hint copied to clipboard");
+    });
+
+    document.getElementById("open-admin").addEventListener("click", async () => {
+      await invoke("bridge_open_admin");
+    });
+
+    refreshStatus();
+  </script>
+</body>
+</html>
