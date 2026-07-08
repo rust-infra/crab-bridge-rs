@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CrabBridge Settings</title>
+  <link rel="stylesheet" href="native-ui.css" />
+</head>
+<body class="settings">
+  <div class="page-shell">
+    <header class="settings-header">
+      <h1 data-i18n="settings.title">Settings</h1>
+      <p class="lead" data-i18n="settings.lead">App preferences only. Provider and bridge setup are in Setup Wizard.</p>
+      <div class="action-bar settings-nav">
+        <button class="secondary" id="open-welcome" data-i18n="settings.back_home">Back to Home</button>
+      </div>
+    </header>
+
+    <section class="card">
+      <h2 data-i18n="settings.appearance">Appearance</h2>
+      <p class="card-desc" data-i18n="settings.theme_note">Theme and language apply instantly across open windows.</p>
+      <label class="field-label" for="lang-select" data-i18n="settings.language">Language</label>
+      <select id="lang-select" class="pref-select">
+        <option value="en" data-i18n="settings.lang.en">English</option>
+        <option value="zh" data-i18n="settings.lang.zh">简体中文</option>
+      </select>
+      <label class="field-label" for="theme-select" data-i18n="settings.theme">Theme</label>
+      <select id="theme-select" class="pref-select">
+        <option value="system" data-i18n="settings.theme.system">Follow system</option>
+        <option value="light" data-i18n="settings.theme.light">Light</option>
+        <option value="dark" data-i18n="settings.theme.dark">Dark</option>
+      </select>
+    </section>
+
+    <section class="card">
+      <h2 data-i18n="settings.startup">Startup</h2>
+      <label class="checkbox-row"><input type="checkbox" id="autostart" /> <span data-i18n="settings.launch_login">Launch CrabBridge at login</span></label>
+    </section>
+
+    <section class="card logs-card">
+      <div class="card-header">
+        <h2 data-i18n="settings.logs">Logs</h2>
+        <div class="row">
+          <button class="secondary" id="refresh-logs" data-i18n="settings.logs_refresh">Refresh</button>
+          <button class="secondary" id="reveal-logs" data-i18n="settings.logs_reveal">Reveal Directory</button>
+        </div>
+      </div>
+      <div class="logs-viewport">
+        <p class="logs-path" id="log-path" hidden></p>
+        <pre id="log-lines" class="logs" hidden></pre>
+        <p id="log-empty" class="logs-empty" hidden></p>
+      </div>
+    </section>
+
+    <div id="message" class="settings-message"></div>
+  </div>
+
+  <script src="ui-prefs.js"></script>
+  <script>
+    function setMessage(text) {
+      document.getElementById("message").textContent = text || "";
+    }
+
+    function getInvoke() {
+      const tauri = window.__TAURI__;
+      if (!tauri?.core?.invoke) {
+        throw new Error("Tauri API not available — restart the desktop app.");
+      }
+      return tauri.core.invoke;
+    }
+
+    async function initSettings() {
+      const invoke = getInvoke();
+      window.CrabUi.init();
+
+      const langSelect = document.getElementById("lang-select");
+      const themeSelect = document.getElementById("theme-select");
+      langSelect.value = window.CrabUi.getLang();
+      themeSelect.value = window.CrabUi.getTheme();
+
+      langSelect.addEventListener("change", async (event) => {
+        window.CrabUi.setLang(event.target.value);
+        setMessage(window.CrabUi.t("settings.msg.lang_updated"));
+        await refreshLogs();
+      });
+
+      themeSelect.addEventListener("change", (event) => {
+        window.CrabUi.setTheme(event.target.value);
+        setMessage(window.CrabUi.t("settings.msg.theme_updated"));
+      });
+
+      async function refreshAutostart() {
+        const enabled = await invoke("autostart_get");
+        document.getElementById("autostart").checked = enabled;
+      }
+
+      document.getElementById("autostart").addEventListener("change", async (event) => {
+        await invoke("autostart_set", { enabled: event.target.checked });
+        setMessage(
+          event.target.checked
+            ? window.CrabUi.t("settings.msg.autostart_on")
+            : window.CrabUi.t("settings.msg.autostart_off")
+        );
+      });
+
+      async function refreshLogs() {
+        const snapshot = await invoke("logs_tail", { limit: 200 });
+        const logPath = document.getElementById("log-path");
+        const logLines = document.getElementById("log-lines");
+        const logEmpty = document.getElementById("log-empty");
+
+        logPath.hidden = false;
+        logPath.textContent = snapshot.path;
+        if (snapshot.lines.length) {
+          logLines.hidden = false;
+          logEmpty.hidden = true;
+          logLines.textContent = snapshot.lines.join("\n");
+        } else {
+          logLines.hidden = true;
+          logEmpty.hidden = false;
+          logEmpty.textContent = window.CrabUi.t("settings.logs_empty");
+        }
+      }
+
+      document.getElementById("refresh-logs").addEventListener("click", refreshLogs);
+      document.getElementById("reveal-logs").addEventListener("click", async () => {
+        await invoke("logs_reveal");
+      });
+
+      document.getElementById("open-welcome").addEventListener("click", async () => {
+        await invoke("back_to_home");
+      });
+
+      await refreshAutostart();
+      await refreshLogs();
+
+      window.addEventListener("crabbridge:prefs-changed", () => {
+        refreshLogs().catch((err) => setMessage(String(err)));
+      });
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", () => {
+        initSettings().catch((err) => setMessage(String(err)));
+      });
+    } else {
+      initSettings().catch((err) => setMessage(String(err)));
+    }
+  </script>
+</body>
+</html>

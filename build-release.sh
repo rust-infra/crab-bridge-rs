@@ -3,9 +3,10 @@ set -euo pipefail
 
 # 独立跨平台打包脚本：支持 macOS / Linux / Windows
 # 依赖：Rust、rustup、cargo-zigbuild（脚本会自动提示安装）
+# 产物：crabridge 独立二进制 → dist/
+# 桌面 GUI 安装包请使用：./scripts/build-desktop.sh → dist/desktop/
 
 SERVER_BIN="crabridge"
-CLI_BIN="crabridge-cli"
 DIST_DIR="dist"
 
 # 目标平台列表（target, 压缩包名后缀）
@@ -60,8 +61,6 @@ package_binary() {
   local target="$1"
   local suffix="$2"
   local bin_name="$3"
-  local no_default_features="${4:-0}"
-
   local src_dir="target/${target}/release"
   local exe_name="${bin_name}"
   local out_name="${bin_name}-${suffix}"
@@ -103,15 +102,12 @@ build_target() {
 
   cargo zigbuild --release --target "${target}" --bin "${SERVER_BIN}"
   package_binary "${target}" "${suffix}" "${SERVER_BIN}"
-
-  cargo zigbuild --release --target "${target}" --bin "${CLI_BIN}" --no-default-features
-  package_binary "${target}" "${suffix}" "${CLI_BIN}" 1
 }
 
 main() {
   log_info "跨平台独立二进制打包脚本"
   log_info "目标平台: Linux(x64/arm64), macOS(x64/arm64), Windows(x64)"
-  log_info "产物: ${SERVER_BIN} (server) + ${CLI_BIN} (cli, slim)"
+  log_info "产物: ${SERVER_BIN} (server)"
 
   ensure_cargo_zigbuild
 

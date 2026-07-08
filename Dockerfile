@@ -9,8 +9,7 @@ WORKDIR /app
 # Use China crates.io mirror (see .cargo/config.toml).
 COPY .cargo/config.toml .cargo/config.toml
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-COPY static ./static
+COPY crates ./crates
 
 RUN cargo build --release --bin crabridge
 

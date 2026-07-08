@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Welcome to CrabBridge</title>
+  <link rel="stylesheet" href="native-ui.css" />
+  <link rel="stylesheet" href="provider-config.css" />
+  <link rel="stylesheet" href="welcome-home.css" />
+</head>
+<body class="welcome">
+  <div class="page-shell">
+    <header class="welcome-header" id="welcome-header">
+      <div class="welcome-mark" aria-hidden="true">C</div>
+      <h1 id="welcome-title">What should we connect?</h1>
+      <p class="lead" id="welcome-lead">Your local bridge for Codex. Start Codex in your usual terminal.</p>
+    </header>
+
+    <main class="welcome-flow">
+      <!-- Home: onboarding complete -->
+      <div id="view-home" class="view-home" hidden>
+        <section class="card home-hero">
+          <span id="home-bridge-status" class="status-pill">unknown</span>
+          <h2 id="home-headline">CrabBridge is ready</h2>
+          <p class="home-subtitle" id="home-subtitle">Open Codex in the terminal where your API keys are exported.</p>
+          <div class="home-actions action-bar center">
+            <button id="home-bridge-start" data-i18n="welcome.bridge.start">Start Bridge</button>
+            <button class="secondary" id="home-bridge-stop" data-i18n="welcome.bridge.stop">Stop</button>
+            <button class="secondary" id="home-bridge-admin" data-i18n="welcome.bridge.admin">Admin</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-header">
+            <h2 data-i18n="welcome.setup.current">Current setup</h2>
+          </div>
+          <div class="meta-list">
+            <div class="meta-row">
+              <span class="label" data-i18n="welcome.setup.provider">Current provider</span>
+              <span class="value" id="home-provider">—</span>
+            </div>
+            <div class="meta-row">
+              <span class="label" data-i18n="welcome.setup.bridge">Bridge</span>
+              <span class="value" id="home-bind">—</span>
+            </div>
+          </div>
+          <div class="home-footer-actions action-bar">
+            <button class="secondary" id="home-show-wizard" data-i18n="welcome.setup.wizard">Setup Wizard</button>
+          </div>
+        </section>
+
+        <pre id="home-hint" class="hint"></pre>
+      </div>
+
+      <!-- Setup: single-step onboarding -->
+      <div id="view-setup" class="view-setup" hidden>
+        <section class="card provider-panel">
+          <div class="setup-panel-header">
+            <span class="step-badge" data-i18n="welcome.setup.wizard_only">Setup Wizard</span>
+            <h2 data-i18n="welcome.quick.title">Quick Setup</h2>
+          </div>
+          <p class="card-desc" data-i18n="welcome.quick.desc">DeepSeek and Kimi work out of the box. Customize base URL or store an API key here if you want.</p>
+          <div id="provider-list" class="provider-list"></div>
+          <p class="field-hint provider-selector-hint" id="provider-default-hint"></p>
+
+          <div class="provider-form-fields">
+            <label class="field-label" for="provider-base-url" data-i18n="welcome.quick.base_url">Base URL</label>
+            <input id="provider-base-url" type="text" data-i18n-placeholder="welcome.quick.base_url_placeholder" placeholder="https://api.deepseek.com/v1" autocomplete="off" />
+            <p class="field-hint" id="provider-default-url"></p>
+
+            <label class="field-label" for="provider-api-key"><span data-i18n="welcome.quick.api_key">API Key</span> (<span id="provider-env-key"></span>)</label>
+            <input id="provider-api-key" type="password" data-i18n-placeholder="provider.key.placeholder_generic" placeholder="From shell env, or paste here" autocomplete="off" />
+            <p class="field-hint" id="provider-key-hint"></p>
+          </div>
+
+          <div class="action-bar end">
+            <button class="secondary" id="setup-back-home" data-i18n="welcome.setup.back_home" hidden>Back Home</button>
+            <button id="set-codex-provider" data-i18n="welcome.quick.set_codex">Set as Codex Provider</button>
+          </div>
+          <div id="setup-status" class="status-line"></div>
+        </section>
+      </div>
+    </main>
+
+    <div id="message"></div>
+  </div>
+
+  <script src="ui-prefs.js"></script>
+  <script src="provider-config.js"></script>
+  <script src="welcome.js"></script>
+</body>
+</html>

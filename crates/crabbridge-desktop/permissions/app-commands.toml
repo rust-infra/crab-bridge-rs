@@ -1,0 +1,31 @@
+[[permission]]
+identifier = "app-commands"
+description = "CrabBridge desktop invoke commands for settings and onboarding UI."
+commands.allow = [
+  "bridge_status",
+  "bridge_start",
+  "bridge_stop",
+  "bridge_restart",
+  "bridge_open_admin",
+  "bridge_run_setup",
+  "secrets_status",
+  "secrets_set",
+  "secrets_clear",
+  "provider_config_get",
+  "provider_config_save",
+  "set_active_codex_provider",
+  "autostart_get",
+  "autostart_set",
+  "config_check",
+  "logs_tail",
+  "logs_reveal",
+  "onboarding_status",
+  "onboarding_run_setup",
+  "onboarding_finish",
+  "install_shell_hook",
+  "codex_usage_hint",
+  "copy_codex_hint",
+  "open_welcome",
+  "back_to_home",
+  "open_settings",
+]
