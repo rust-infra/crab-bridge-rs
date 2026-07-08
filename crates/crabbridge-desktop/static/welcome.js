@@ -36,10 +36,12 @@
 
     if (home) {
       byId("welcome-title").textContent = tr("welcome.title.home");
-      byId("welcome-lead").textContent = tr("welcome.lead.home");
+      byId("welcome-lead").hidden = true;
     } else {
       byId("welcome-title").textContent = tr("welcome.title.setup");
-      byId("welcome-lead").textContent = tr("welcome.lead.setup");
+      const lead = byId("welcome-lead");
+      lead.hidden = false;
+      lead.textContent = tr("welcome.lead.setup");
     }
   }
 
@@ -56,16 +58,25 @@
     pill.textContent = bridge.status;
     pill.className = "status-pill " + (running ? "ok" : bridge.status === "error" ? "fail" : "");
 
-    byId("home-headline").textContent = running
-      ? tr("welcome.msg.bridge_running")
-      : bridge.status === "error"
-        ? tr("welcome.msg.bridge_error")
-        : tr("welcome.msg.bridge_stopped");
-    byId("home-subtitle").textContent = running
-      ? tr("welcome.home.connect_at", { url: formatListenUrl(bridge) })
-      : bridge.last_error
+    const headline = byId("home-headline");
+    if (running) {
+      headline.hidden = true;
+    } else {
+      headline.hidden = false;
+      headline.textContent =
+        bridge.status === "error"
+          ? tr("welcome.msg.bridge_error")
+          : tr("welcome.msg.bridge_stopped");
+    }
+    const subtitle = byId("home-subtitle");
+    if (running) {
+      subtitle.hidden = true;
+    } else {
+      subtitle.hidden = false;
+      subtitle.textContent = bridge.last_error
         ? bridge.last_error
         : tr("welcome.msg.start_help");
+    }
 
     byId("home-bridge-start").disabled = running;
     byId("home-bridge-stop").disabled = !running;

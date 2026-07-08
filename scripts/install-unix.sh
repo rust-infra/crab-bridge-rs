@@ -124,8 +124,6 @@ install_config() {
         cp "${REPO_ROOT}/crabbridge.example.toml" "${config_file}"
     else
         cat >"${config_file}" <<'EOF'
-default_provider = "deepseek"
-
 [providers.deepseek]
 
 [providers.kimi]

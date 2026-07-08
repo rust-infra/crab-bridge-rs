@@ -45,7 +45,6 @@ async fn spawn_test_server(
         ),
         client: Client::new(),
         providers: Arc::new(providers),
-        default_provider: Arc::new(provider_slug.to_string()),
         upstream_request: Arc::new(UpstreamRequestConfig::default()),
         cache: None,
         metrics: BridgeMetrics::new(),
@@ -133,39 +132,6 @@ async fn responses_without_authorization_returns_401() {
         .expect("send");
 
     assert_eq!(response.status(), 401);
-}
-
-#[tokio::test]
-async fn legacy_v1_route_still_works() {
-    let mut mock = mockito::Server::new_async().await;
-    let _mock = mock
-        .mock("POST", "/v1/chat/completions")
-        .match_header("authorization", "Bearer test-key")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(r#"{"choices":[{"message":{"role":"assistant","content":"legacy"}}]}"#)
-        .create_async()
-        .await;
-
-    let (addr, _handle) = spawn_test_server(&format!("{}/v1", mock.url()), "deepseek").await;
-
-    let response = Client::new()
-        .post(format!("http://{addr}/v1/responses"))
-        .header("Authorization", format!("Bearer {TEST_BEARER}"))
-        .json(&json!({
-            "model": "gpt-5.4",
-            "input": "hello",
-            "stream": false
-        }))
-        .send()
-        .await
-        .expect("send")
-        .text()
-        .await
-        .expect("body");
-
-    let body: serde_json::Value = serde_json::from_str(&response).unwrap();
-    assert_eq!(body["output"][0]["content"][0]["text"], "legacy");
 }
 
 #[tokio::test]

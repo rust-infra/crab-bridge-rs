@@ -127,16 +127,7 @@ pub async fn run_setup(opts: SetupOptions) -> Result<()> {
                 .as_ref()
                 .context("multi_provider_slugs required when writing bridge config")?;
             let slug_refs: Vec<&str> = slugs.iter().map(String::as_str).collect();
-            let default_provider = slugs
-                .last()
-                .map(String::as_str)
-                .unwrap_or_else(|| opts.provider_slug.as_str());
-            config::write_multi_bridge_config(
-                &path,
-                default_provider,
-                &slug_refs,
-                &opts.bind_addr.to_string(),
-            )?;
+            config::write_multi_bridge_config(&path, &slug_refs, &opts.bind_addr.to_string())?;
             bridge_config_created = true;
             Some(path)
         }
@@ -328,7 +319,7 @@ pub async fn collect_setup_check(opts: SetupCheckOptions) -> SetupCheckReport {
             &mut checks,
             "model_provider",
             CheckStatus::Warn,
-            format!("legacy \"{LEGACY_PROVIDER_NAME}\" — run Setup from the CrabBridge menu"),
+            format!("expected crabbridge-* provider, got \"{LEGACY_PROVIDER_NAME}\""),
         ),
         Some(other) => push_check(
             &mut checks,
@@ -410,16 +401,7 @@ pub async fn collect_setup_check(opts: SetupCheckOptions) -> SetupCheckReport {
         let provider_table = doc
             .get("model_providers")
             .and_then(|v| v.get(&codex_name))
-            .and_then(|v| v.as_table())
-            .or_else(|| {
-                if opts.provider_slugs.len() == 1 {
-                    doc.get("model_providers")
-                        .and_then(|v| v.get(LEGACY_PROVIDER_NAME))
-                        .and_then(|v| v.as_table())
-                } else {
-                    None
-                }
-            });
+            .and_then(|v| v.as_table());
 
         let mut bridge_base_url = None;
         match provider_table {
@@ -611,28 +593,11 @@ fn check_bridge_config_file(checks: &mut Vec<ConfigCheck>, path: &Path) {
 }
 
 fn bridge_config_summary(cfg: &BridgeConfigFile) -> String {
-    let mut parts = Vec::new();
-    if let Some(p) = &cfg.default_provider {
-        parts.push(format!("default={p}"));
-    }
-    if !cfg.providers.is_empty() {
-        let slugs: Vec<_> = cfg.providers.keys().cloned().collect();
-        parts.push(format!("providers={}", slugs.join(",")));
-    } else if let Some(p) = &cfg.provider {
-        parts.push(format!("provider={p}"));
-    }
-    if let Some(upstream) = &cfg.upstream {
-        if let Some(m) = &upstream.model {
-            parts.push(format!("model={m}"));
-        }
-        if let Some(u) = &upstream.base_url {
-            parts.push(format!("upstream={u}"));
-        }
-    }
-    if parts.is_empty() {
+    if cfg.providers.is_empty() {
         "ok".into()
     } else {
-        parts.join(", ")
+        let slugs: Vec<_> = cfg.providers.keys().cloned().collect();
+        format!("providers={}", slugs.join(","))
     }
 }
 
@@ -859,7 +824,7 @@ trust_level = "trusted"
         let path = dir.join("crabbridge.toml");
         config::write_bridge_config(&path, ProviderKind::Kimi, "127.0.0.1:11435").unwrap();
         let body = fs::read_to_string(&path).unwrap();
-        assert!(body.contains("default_provider = \"kimi\""));
+        assert!(!body.contains("default_provider"));
         assert!(body.contains("[providers.kimi]"));
         assert!(!body.contains("api_key"));
     }

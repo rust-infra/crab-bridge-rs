@@ -10,9 +10,6 @@ use crate::state::AppState;
 pub fn build_router(state: AppState, admin_enabled: bool) -> Router {
     let mut router = Router::new()
         .route("/health", get(health))
-        .route("/v1", get(api_root))
-        .route("/v1/responses", axum::routing::post(handle_responses))
-        .route("/v1/models", get(handle_models))
         .route("/{provider}/v1", get(api_root))
         .route(
             "/{provider}/v1/responses",

@@ -101,14 +101,10 @@ fn load_bridge_config(path: &Path) -> Result<Option<BridgeConfigFile>> {
     }
 }
 
-fn active_provider_slug(
-    bridge: Option<&BridgeConfigFile>,
-    settings: &ProviderSettingsFile,
-) -> String {
+fn active_provider_slug(settings: &ProviderSettingsFile) -> String {
     settings
         .active_provider
         .clone()
-        .or_else(|| bridge.and_then(|c| c.default_provider.clone()))
         .filter(|slug| ProviderKind::from_route(slug).is_some())
         .unwrap_or_else(|| ProviderKind::DeepSeek.route_slug().to_string())
 }
@@ -188,7 +184,7 @@ pub fn snapshot(
     hydrate_api_keys()?;
     let settings = load_settings_file(config_dir)?;
     let bridge = load_bridge_config(bridge_config_path)?;
-    let active = active_provider_slug(bridge.as_ref(), &settings);
+    let active = active_provider_slug(&settings);
     let selected_slug = selected_slug
         .map(str::to_string)
         .filter(|slug| ProviderKind::from_route(slug).is_some())
@@ -268,13 +264,7 @@ pub fn save(
     }
     save_settings_file(config_dir, &settings)?;
 
-    patch_bridge_config(
-        bridge_config_path,
-        bind_addr,
-        request.set_active.then_some(request.slug.as_str()),
-        &request.slug,
-        base_url,
-    )?;
+    patch_bridge_config(bridge_config_path, bind_addr, &request.slug, base_url)?;
 
     if request.set_active {
         match codex_home_dir() {
@@ -305,13 +295,7 @@ pub fn save(
     snapshot(config_dir, bridge_config_path, Some(&request.slug))
 }
 
-fn patch_bridge_config(
-    path: &Path,
-    bind_addr: &str,
-    active_slug: Option<&str>,
-    slug: &str,
-    base_url: &str,
-) -> Result<()> {
+fn patch_bridge_config(path: &Path, bind_addr: &str, slug: &str, base_url: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -323,21 +307,12 @@ fn patch_bridge_config(
             .parse::<DocumentMut>()
             .with_context(|| format!("failed to parse {}", path.display()))?
     } else {
-        config::write_multi_bridge_config(
-            path,
-            active_slug.unwrap_or(slug),
-            ProviderKind::builtin_slugs(),
-            bind_addr,
-        )?;
+        config::write_multi_bridge_config(path, ProviderKind::builtin_slugs(), bind_addr)?;
         fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?
             .parse::<DocumentMut>()
             .with_context(|| format!("failed to parse {}", path.display()))?
     };
-
-    if let Some(active) = active_slug {
-        doc["default_provider"] = value(active);
-    }
 
     if doc.get("providers").is_none() {
         doc["providers"] = toml_edit::Item::Table(toml_edit::Table::new());

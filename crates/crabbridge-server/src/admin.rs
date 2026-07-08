@@ -31,7 +31,6 @@ pub struct ProviderOverview {
 #[derive(Debug, Serialize)]
 pub struct OverviewResponse {
     pub version: &'static str,
-    pub default_provider: String,
     pub providers: Vec<ProviderOverview>,
     pub metrics: MetricsSnapshot,
     pub sessions: SessionStats,
@@ -207,7 +206,6 @@ fn build_overview(state: &AppState) -> OverviewResponse {
 
     OverviewResponse {
         version: env!("CARGO_PKG_VERSION"),
-        default_provider: state.default_provider.as_str().to_string(),
         providers,
         metrics: state.metrics.snapshot(state.started_at),
         sessions: state.sessions.stats(),
@@ -252,7 +250,6 @@ mod tests {
             sessions: SessionStore::with_limits_and_ttl(64, 1024 * 1024, Duration::from_secs(3600)),
             client: Client::new(),
             providers: Arc::new(providers),
-            default_provider: Arc::new("deepseek".to_string()),
             upstream_request: Arc::new(UpstreamRequestConfig::default()),
             cache: None,
             metrics: BridgeMetrics::new(),
@@ -264,7 +261,6 @@ mod tests {
     fn overview_contains_version_and_providers() {
         let overview = build_overview(&test_state());
         assert_eq!(overview.version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(overview.default_provider, "deepseek");
         assert_eq!(overview.providers.len(), 1);
         assert!(!overview.cache.enabled);
     }

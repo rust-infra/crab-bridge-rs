@@ -57,7 +57,9 @@ impl ServeHandle {
     /// Unlike [`ServeHandle::shutdown`], this does not signal a shutdown; it
     /// blocks the caller so foreground hosts stay alive while the server runs.
     pub async fn wait(&mut self) -> Result<()> {
-        (&mut self.join).await.context("bridge server task panicked")?
+        (&mut self.join)
+            .await
+            .context("bridge server task panicked")?
     }
 
     /// Stop the server and wait for the background task to finish.
@@ -123,7 +125,6 @@ pub async fn start_serve(
     let admin_enabled = admin_enabled(cfg.as_ref());
 
     let mut providers = HashMap::new();
-    let default_provider_slug = resolved.default_provider.as_str();
     for (slug, entry) in &resolved.providers {
         let kind = ProviderKind::from_route(slug).unwrap_or(ProviderKind::Custom);
         let slug_upper = slug.to_ascii_uppercase();
@@ -135,15 +136,6 @@ pub async fn start_serve(
                 std::env::var(format!("CRABRIDGE_{slug_upper}_BASE_URL"))
                     .ok()
                     .filter(|u| !u.is_empty())
-            })
-            .or_else(|| {
-                (slug == default_provider_slug)
-                    .then(|| {
-                        std::env::var("UPSTREAM_BASE_URL")
-                            .ok()
-                            .filter(|u| !u.is_empty())
-                    })
-                    .flatten()
             })
             .unwrap_or_else(|| kind.default_base_url().to_string());
         let upstream = validate_upstream_url(&base_url)?;
@@ -168,16 +160,6 @@ pub async fn start_serve(
     if providers.is_empty() {
         bail!("no providers configured");
     }
-
-    let default_provider = if providers.contains_key(&resolved.default_provider) {
-        resolved.default_provider
-    } else {
-        providers
-            .keys()
-            .min()
-            .cloned()
-            .context("no default provider available")?
-    };
 
     let upstream_request = Arc::new(UpstreamRequestConfig::default());
     let client = Client::new();
@@ -210,12 +192,10 @@ pub async fn start_serve(
         None
     };
 
-    let default_provider = Arc::new(default_provider);
     let state = AppState {
         sessions: sessions.clone(),
         client,
         providers: Arc::new(providers),
-        default_provider: default_provider.clone(),
         upstream_request,
         cache,
         metrics,
@@ -252,7 +232,6 @@ pub async fn start_serve(
     let provider_list: Vec<_> = resolved.providers.keys().cloned().collect();
     info!(
         %bind_addr,
-        default_provider = %default_provider,
         providers = ?provider_list,
         cache_enabled,
         admin_enabled,

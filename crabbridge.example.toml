@@ -2,11 +2,9 @@
 # Copy to crabbridge.toml (cwd) or ~/.config/crabbridge/config.toml
 #
 # API keys and models come from Codex requests (env_key + request body).
-# You can override the upstream base URL per provider, or globally via [upstream].
+# You can override the upstream base URL per provider.
 
 # Config path can also be set with --config / CRABRIDGE_CONFIG.
-
-default_provider = "deepseek"
 
 [providers.deepseek]
 # Optional: override the default DeepSeek base URL.
@@ -19,12 +17,6 @@ default_provider = "deepseek"
 # base_url = "https://api.kimi.com/coding/v1"
 # Optional: per-provider model map.
 # model_map = "gpt-5.4:kimi-for-coding"
-
-# Legacy single-provider section (still supported).
-# [upstream]
-# base_url = "https://api.deepseek.com/v1"
-# api_key = "sk-..."
-# model = "deepseek-v4-pro"
 
 [server]
 bind_addr = "127.0.0.1:11435"

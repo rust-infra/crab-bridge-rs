@@ -22,7 +22,6 @@ pub struct AppState {
     pub sessions: SessionStore,
     pub client: Client,
     pub providers: Arc<HashMap<String, ProviderRuntime>>,
-    pub default_provider: Arc<String>,
     pub upstream_request: Arc<UpstreamRequestConfig>,
     pub cache: Option<SharedResponseCache>,
     pub metrics: Arc<BridgeMetrics>,
