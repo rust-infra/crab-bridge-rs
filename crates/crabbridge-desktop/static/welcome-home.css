@@ -11,6 +11,11 @@
   margin-bottom: 14px;
 }
 
+.home-hero:has(#home-headline[hidden]) .status-pill,
+.home-hero:has(#home-subtitle[hidden]) .status-pill {
+  margin-bottom: 10px;
+}
+
 .home-hero h2 {
   font-size: 20px;
   font-weight: 600;

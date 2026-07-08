@@ -86,13 +86,9 @@ pub async fn health() -> impl IntoResponse {
 /// Codex probes `HEAD/GET {base_url}` for reachability (e.g. `http://127.0.0.1:11435/kimi/v1`).
 pub async fn api_root(
     State(state): State<AppState>,
-    provider: Option<Path<String>>,
+    Path(provider): Path<String>,
 ) -> impl IntoResponse {
-    let slug = provider
-        .as_ref()
-        .map(|p| p.0.as_str())
-        .unwrap_or(state.default_provider.as_str());
-    api_root_for_provider(&state, slug).await
+    api_root_for_provider(&state, &provider).await
 }
 
 async fn api_root_for_provider(state: &AppState, provider: &str) -> Response {
@@ -109,13 +105,10 @@ async fn api_root_for_provider(state: &AppState, provider: &str) -> Response {
 
 pub async fn handle_models(
     State(state): State<AppState>,
-    provider: Option<Path<String>>,
+    Path(provider): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let slug = provider
-        .map(|p| p.0)
-        .unwrap_or_else(|| state.default_provider.as_str().to_string());
-    handle_models_inner(state, &slug, &headers).await
+    handle_models_inner(state, &provider, &headers).await
 }
 
 async fn handle_models_inner(state: AppState, provider: &str, headers: &HeaderMap) -> Response {
@@ -227,14 +220,11 @@ pub async fn handle_fallback(req: Request) -> Response {
 
 pub async fn handle_responses(
     State(state): State<AppState>,
-    provider: Option<Path<String>>,
+    Path(provider): Path<String>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let slug = provider
-        .map(|p| p.0)
-        .unwrap_or_else(|| state.default_provider.as_str().to_string());
-    handle_responses_for_provider(state, &slug, &headers, body).await
+    handle_responses_for_provider(state, &provider, &headers, body).await
 }
 
 async fn handle_responses_for_provider(

@@ -25,8 +25,6 @@ One `crabridge serve` process can host **multiple upstream providers**. Codex se
 | `http://127.0.0.1:11435/deepseek/v1` | DeepSeek |
 | `http://127.0.0.1:11435/kimi/v1` | Kimi Code |
 
-Legacy `/v1/*` routes still work and map to `default_provider` from `crabbridge.toml`.
-
 **Authentication**: Upstream API keys are **not** stored in bridge TOML. Codex sends `Authorization: Bearer …` on each request; the bridge forwards that token to the upstream for the matched route. Shell env vars (`DEEPSEEK_API_KEY`, `KIMI_API_KEY`) are for Codex's `env_key`, not for bridge config.
 
 **Does not expose** `/v1/chat/completions`. Clients must speak the Responses API (Codex CLI is the primary target).
@@ -86,7 +84,7 @@ crab-bridge-rs/
 │           ├── server.rs           # serve / prompt handlers
 │           ├── opts.rs             # Clap for crabridge (BridgeCli)
 │           ├── app.rs              # build_router()
-│           ├── handlers.rs         # HTTP handlers (routed + legacy /v1)
+│           ├── handlers.rs         # HTTP handlers (provider-scoped /v1 routes)
 │           ├── state.rs            # AppState + per-provider ProviderRuntime
 │           ├── translate.rs        # Responses ↔ Chat conversion, model/tool mapping
 │           ├── stream.rs           # Chat SSE → Responses SSE streaming translation
@@ -158,8 +156,6 @@ Priority: **CLI flags > environment variable > TOML file > built-in defaults**.
 Loads `crabbridge.toml` and resolves the provider map for `serve`:
 
 ```toml
-default_provider = "deepseek"
-
 [providers.deepseek]
 base_url = "https://api.deepseek.com/v1"   # optional override
 model_map = "gpt-5.4:deepseek-v4-pro"      # optional
@@ -173,8 +169,7 @@ model_map = "gpt-5.4:kimi-for-coding"
 
 - Each `[providers.{slug}]` section enables that route (no API key required in TOML).
 - If TOML has **no** `[providers.*]` sections, fall back to both built-in slugs (`deepseek`, `kimi`).
-- Legacy `[provider]` + `[upstream]` still supported as a single-provider fallback.
-- `default_provider` selects the legacy `/v1/*` route; defaults to first slug alphabetically if unset.
+- Active provider for Codex is stored in desktop `provider-settings.json` (`active_provider`), not in bridge TOML.
 
 `ProviderSection` fields: `base_url`, `model_map` only (no `api_key`, no `model`).
 
@@ -192,7 +187,6 @@ pub struct AppState {
     pub sessions: SessionStore,
     pub client: Client,
     pub providers: Arc<HashMap<String, ProviderRuntime>>,
-    pub default_provider: Arc<String>,
     pub upstream_request: Arc<UpstreamRequestConfig>,
     pub cache: Option<SharedResponseCache>,
     pub metrics: Arc<BridgeMetrics>,
@@ -212,7 +206,6 @@ Default upstream model per route comes from `ProviderKind::default_model()`, not
 | `api_root` | `GET /{provider}/v1` | Codex reachability probe |
 | `handle_models` | `GET /{provider}/v1/models` | Proxy upstream models + known_models fallback |
 | `handle_responses` | `POST /{provider}/v1/responses` | Core translation path |
-| legacy handlers | `GET/POST /v1/*` | → `default_provider` |
 | `handle_fallback` | `*` | 404 |
 
 **`handle_responses` flow**:
@@ -334,10 +327,6 @@ Empty 200 — Codex reachability probe.
 
 Disabled when `[admin] enabled = false`.
 
-### 5.6 Legacy `/v1/*`
-
-Maps to `default_provider` from config.
-
 ---
 
 ## 6. Configuration
@@ -358,7 +347,7 @@ See `crabbridge.example.toml` for the full schema (`[server]`, `[session]`, `[ca
 | `KIMI_API_KEY` | Kimi Code key (same) |
 | `CRABRIDGE_CONFIG` | Path to `crabbridge.toml` |
 | `CRABRIDGE_{SLUG}_BASE_URL` | Per-route upstream URL override |
-| `CRABRIDGE_DEFAULT_PROVIDER` | Legacy `/v1/*` default slug |
+| `CRABRIDGE_DEFAULT_PROVIDER` | Preferred provider slug in config metadata |
 | `BRIDGE_ADDR` | Listen address (default `127.0.0.1:11435`) |
 | `SESSION_DB` | SQLite path (default `data/crabbridge.db`) |
 | `CRABRIDGE_MODEL_MAP` | Global model map |
@@ -439,7 +428,7 @@ Conversion, sessions (response_id keying, cross-provider resume), config resolut
 
 ### 10.2 Integration tests (`crates/crabbridge-server/tests/integration.rs`)
 
-Uses mockito; exercises `/deepseek/v1/responses`, `/deepseek/v1/models`, and legacy `/v1/responses`.
+Uses mockito; exercises `/deepseek/v1/responses` and `/deepseek/v1/models`.
 
 ---
 

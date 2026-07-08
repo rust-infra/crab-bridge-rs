@@ -21,11 +21,6 @@ pub fn default_config_path() -> PathBuf {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct BridgeConfigFile {
-    pub default_provider: Option<String>,
-    /// Legacy single-provider preset (`deepseek` | `kimi`).
-    pub provider: Option<String>,
-    /// Legacy single upstream block.
-    pub upstream: Option<UpstreamSection>,
     #[serde(default)]
     pub providers: HashMap<String, ProviderSection>,
     pub server: Option<ServerSection>,
@@ -41,16 +36,6 @@ pub struct BridgeConfigFile {
 pub struct ProviderSection {
     pub model_map: Option<String>,
     pub base_url: Option<String>,
-}
-
-#[derive(Debug, Default, Clone, Deserialize)]
-pub struct UpstreamSection {
-    #[allow(dead_code)]
-    pub api_key: Option<String>,
-    #[allow(dead_code)]
-    pub base_url: Option<String>,
-    #[allow(dead_code)]
-    pub model: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -110,7 +95,6 @@ pub struct ProviderEntry {
 /// All providers served by one `crabridge serve` process.
 #[derive(Debug, Clone)]
 pub struct ServeProviders {
-    pub default_provider: String,
     pub providers: HashMap<String, ProviderEntry>,
 }
 
@@ -250,12 +234,6 @@ pub fn load_config_file(path: &Path) -> Result<BridgeConfigFile> {
 }
 
 pub fn apply_config_to_env(cfg: &BridgeConfigFile) {
-    set_if_missing(
-        "CRABRIDGE_DEFAULT_PROVIDER",
-        cfg.default_provider.as_deref(),
-    );
-    set_if_missing("CRABRIDGE_PROVIDER", cfg.provider.as_deref());
-
     if !cfg.providers.is_empty() {
         for (slug, section) in &cfg.providers {
             let prefix = slug.to_ascii_uppercase();
@@ -268,12 +246,6 @@ pub fn apply_config_to_env(cfg: &BridgeConfigFile) {
                 section.base_url.as_deref(),
             );
         }
-    }
-
-    if let Some(upstream) = &cfg.upstream {
-        set_if_missing("UPSTREAM_BASE_URL", upstream.base_url.as_deref());
-        set_if_missing("UPSTREAM_API_KEY", upstream.api_key.as_deref());
-        set_if_missing("UPSTREAM_MODEL", upstream.model.as_deref());
     }
 
     if let Some(server) = &cfg.server {
@@ -335,29 +307,19 @@ pub fn resolve_serve_providers(cfg: Option<&BridgeConfigFile>) -> Result<ServePr
 
     let mut providers = HashMap::new();
 
-    if let Some(cfg) = cfg {
-        if !cfg.providers.is_empty() {
-            for (slug, section) in &cfg.providers {
-                providers.insert(
-                    slug.clone(),
-                    ProviderEntry {
-                        slug: slug.clone(),
-                        model_map: section
-                            .model_map
-                            .clone()
-                            .or_else(|| global_model_map.clone()),
-                        base_url: section.base_url.clone(),
-                    },
-                );
-            }
-        } else if cfg.upstream.is_some() || cfg.provider.is_some() {
-            let slug = legacy_provider_slug(cfg);
+    if let Some(cfg) = cfg
+        && !cfg.providers.is_empty()
+    {
+        for (slug, section) in &cfg.providers {
             providers.insert(
                 slug.clone(),
                 ProviderEntry {
-                    slug,
-                    model_map: global_model_map.clone(),
-                    base_url: None,
+                    slug: slug.clone(),
+                    model_map: section
+                        .model_map
+                        .clone()
+                        .or_else(|| global_model_map.clone()),
+                    base_url: section.base_url.clone(),
                 },
             );
         }
@@ -367,33 +329,7 @@ pub fn resolve_serve_providers(cfg: Option<&BridgeConfigFile>) -> Result<ServePr
         providers = builtin_provider_entries(global_model_map);
     }
 
-    let default_provider = cfg
-        .and_then(|c| c.default_provider.clone())
-        .or_else(|| cfg.and_then(legacy_provider_slug_opt))
-        .or_else(|| env::var("CRABRIDGE_DEFAULT_PROVIDER").ok())
-        .or_else(|| env::var("CRABRIDGE_PROVIDER").ok())
-        .filter(|slug| providers.contains_key(slug))
-        .or_else(|| providers.keys().min().cloned());
-
-    let default_provider = match default_provider {
-        Some(slug) => slug,
-        None => bail!("no providers configured"),
-    };
-
-    Ok(ServeProviders {
-        default_provider,
-        providers,
-    })
-}
-
-fn legacy_provider_slug(cfg: &BridgeConfigFile) -> String {
-    legacy_provider_slug_opt(cfg).unwrap_or_else(|| "deepseek".to_string())
-}
-
-fn legacy_provider_slug_opt(cfg: &BridgeConfigFile) -> Option<String> {
-    cfg.provider
-        .as_ref()
-        .map(|p| ProviderKind::parse(p).route_slug().to_string())
+    Ok(ServeProviders { providers })
 }
 
 /// Resolve an upstream API key for setup / CLI tools (Codex passes keys per request).
@@ -437,28 +373,17 @@ pub fn provider_bridge_slugs(slugs: &[String]) -> Vec<String> {
 
 /// Write a starter `crabbridge.toml` for `crabridge serve`.
 pub fn write_bridge_config(path: &Path, provider: ProviderKind, bind_addr: &str) -> Result<()> {
-    write_multi_bridge_config(
-        path,
-        provider.route_slug(),
-        &[provider.route_slug()],
-        bind_addr,
-    )
+    write_multi_bridge_config(path, &[provider.route_slug()], bind_addr)
 }
 
 /// Write a multi-provider `crabbridge.toml`.
-pub fn write_multi_bridge_config(
-    path: &Path,
-    default_provider: &str,
-    providers: &[&str],
-    bind_addr: &str,
-) -> Result<()> {
+pub fn write_multi_bridge_config(path: &Path, providers: &[&str], bind_addr: &str) -> Result<()> {
     let mut body = String::from(
         "# Generated by: CrabBridge desktop setup\n\
          # API keys and models come from Codex requests (env_key + request body).\n\
          # Upstream URLs are derived from provider route slugs.\n\
          \n",
     );
-    body.push_str(&format!("default_provider = \"{default_provider}\"\n\n"));
 
     for slug in providers {
         body.push_str(&format!("[providers.{slug}]\n\n"));
@@ -526,8 +451,6 @@ mod tests {
     #[test]
     fn parses_multi_provider_config() {
         let toml = r#"
-default_provider = "deepseek"
-
 [providers.deepseek]
 [providers.kimi]
 
@@ -535,50 +458,32 @@ default_provider = "deepseek"
 bind_addr = "127.0.0.1:11435"
 "#;
         let cfg: BridgeConfigFile = toml::from_str(toml).unwrap();
-        assert_eq!(cfg.default_provider.as_deref(), Some("deepseek"));
         assert_eq!(cfg.providers.len(), 2);
-    }
-
-    #[test]
-    fn parses_legacy_config() {
-        let toml = r#"
-provider = "kimi"
-
-[upstream]
-api_key = "sk-test"
-base_url = "https://api.kimi.com/coding/v1"
-model = "kimi-for-coding"
-"#;
-        let cfg: BridgeConfigFile = toml::from_str(toml).unwrap();
-        assert_eq!(cfg.provider.as_deref(), Some("kimi"));
     }
 
     #[test]
     fn write_and_reload_multi_provider() {
         let dir = temp_dir("multi");
         let path = dir.join("crabbridge.toml");
-        write_multi_bridge_config(&path, "deepseek", &["deepseek", "kimi"], "127.0.0.1:11435")
-            .unwrap();
+        write_multi_bridge_config(&path, &["deepseek", "kimi"], "127.0.0.1:11435").unwrap();
 
         let cfg = load_config_file(&path).unwrap();
-        assert_eq!(cfg.default_provider.as_deref(), Some("deepseek"));
         assert_eq!(cfg.providers.len(), 2);
         let body = fs::read_to_string(&path).unwrap();
         assert!(!body.contains("api_key"));
+        assert!(!body.contains("default_provider"));
     }
 
     #[test]
     fn resolve_serve_providers_from_multi_config() {
         let cfg: BridgeConfigFile = toml::from_str(
             r#"
-default_provider = "kimi"
 [providers.deepseek]
 [providers.kimi]
 "#,
         )
         .unwrap();
         let resolved = resolve_serve_providers(Some(&cfg)).unwrap();
-        assert_eq!(resolved.default_provider, "kimi");
         assert_eq!(resolved.providers.len(), 2);
     }
 
@@ -626,26 +531,6 @@ default_provider = "kimi"
             }),
             ..Default::default()
         })));
-    }
-
-    #[test]
-    fn apply_config_does_not_override_existing_env() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe {
-            env::set_var("CRABRIDGE_DEFAULT_PROVIDER", "from-env");
-        }
-
-        let cfg = BridgeConfigFile {
-            default_provider: Some("kimi".into()),
-            ..Default::default()
-        };
-        apply_config_to_env(&cfg);
-
-        assert_eq!(env::var("CRABRIDGE_DEFAULT_PROVIDER").unwrap(), "from-env");
-
-        unsafe {
-            env::remove_var("CRABRIDGE_DEFAULT_PROVIDER");
-        }
     }
 
     #[test]

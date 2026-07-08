@@ -4,8 +4,6 @@
 #
 # API keys come from Codex requests (env vars on the host), not this file.
 
-default_provider = "deepseek"
-
 [providers.deepseek]
 # base_url = "https://api.deepseek.com/v1"
 

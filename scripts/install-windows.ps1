@@ -87,8 +87,6 @@ function Install-Config([string]$RepoRoot, [string]$TargetConfigDir) {
         Copy-Item $example $configFile
     } else {
         @"
-default_provider = "deepseek"
-
 [providers.deepseek]
 
 [providers.kimi]

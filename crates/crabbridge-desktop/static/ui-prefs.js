@@ -29,7 +29,6 @@
       "welcome.title.setup": "What should we connect?",
       "welcome.lead.setup": "Optional: choose a Codex provider, custom base URL, or store API keys in keychain.",
       "welcome.title.home": "CrabBridge",
-      "welcome.lead.home": "Your local bridge for Codex. Start Codex in your usual terminal.",
       "welcome.bridge.start": "Start Bridge",
       "welcome.bridge.stop": "Stop",
       "welcome.bridge.admin": "Admin",
@@ -43,7 +42,6 @@
       "welcome.quick.base_url_placeholder": "https://api.deepseek.com/v1",
       "welcome.quick.api_key": "API Key",
       "welcome.quick.set_codex": "Set as Codex Provider",
-      "welcome.msg.bridge_running": "Bridge is running",
       "welcome.msg.bridge_stopped": "Bridge is stopped",
       "welcome.msg.bridge_error": "Bridge error",
       "welcome.msg.bridge_started": "Bridge started",
@@ -63,8 +61,7 @@
       "provider.chip.current": "{label} · Current",
       "welcome.meta.not_configured": "Not configured",
       "welcome.setup.wizard_only": "Setup Wizard",
-      "welcome.setup.back_home": "Back Home",
-      "welcome.home.connect_at": "Codex can connect at {url}"
+      "welcome.setup.back_home": "Back Home"
     },
     zh: {
       "settings.title": "设置",
@@ -92,7 +89,6 @@
       "welcome.title.setup": "需要连接什么？",
       "welcome.lead.setup": "可选：选择 Codex Provider、自定义 Base URL，或将 API Key 存入钥匙串。",
       "welcome.title.home": "CrabBridge",
-      "welcome.lead.home": "本地 Codex 网桥。请在常用终端中启动 Codex。",
       "welcome.bridge.start": "启动 Bridge",
       "welcome.bridge.stop": "停止",
       "welcome.bridge.admin": "管理页",
@@ -106,7 +102,6 @@
       "welcome.quick.base_url_placeholder": "https://api.deepseek.com/v1",
       "welcome.quick.api_key": "API Key",
       "welcome.quick.set_codex": "设为 Codex Provider",
-      "welcome.msg.bridge_running": "Bridge 运行中",
       "welcome.msg.bridge_stopped": "Bridge 已停止",
       "welcome.msg.bridge_error": "Bridge 异常",
       "welcome.msg.bridge_started": "Bridge 已启动",
@@ -126,8 +121,7 @@
       "provider.chip.current": "{label} · 当前",
       "welcome.meta.not_configured": "未配置",
       "welcome.setup.wizard_only": "设置向导",
-      "welcome.setup.back_home": "返回首页",
-      "welcome.home.connect_at": "Codex 可连接到 {url}"
+      "welcome.setup.back_home": "返回首页"
     }
   };
 

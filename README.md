@@ -15,16 +15,15 @@ One `crabridge serve` process can host **multiple upstream providers** at once. 
 - `http://127.0.0.1:11435/deepseek/v1`
 - `http://127.0.0.1:11435/kimi/v1`
 
-Legacy `/v1/*` routes still work and map to `default_provider`.
-
 ## Features
 
 - **Responses-only bridge** — built for Codex (`wire_api = "responses"`), not a Chat Completions passthrough
+- **Built-in providers** — DeepSeek and Kimi work out of the box; no config file required to start `serve`
 - **Protocol translation** — tool calls, reasoning content, namespace tools, provider-aware model mapping
 - **Streaming** — real-time Chat SSE → Responses SSE conversion
 - **Session persistence** — SQLite-backed history keyed by `response_id` for `previous_response_id` continuity
 - **Optional cache & rate limiting** — moka response cache, global RPS limit
-- **Desktop tray app** — Tauri 2 GUI with Setup Wizard (Codex + bridge config), Settings, and embedded bridge lifecycle
+- **Desktop tray app** — Tauri 2 GUI with optional Setup Wizard, Settings, and embedded bridge lifecycle
 
 ## Requirements
 
@@ -33,38 +32,41 @@ Legacy `/v1/*` routes still work and map to `default_provider`.
 
 ## Quick Start
 
-### DeepSeek (default)
+### Zero-config server
 
 ```bash
 export DEEPSEEK_API_KEY=sk-...
-cp crabbridge.example.toml crabbridge.toml
+export KIMI_API_KEY=sk-...    # optional, for Kimi routes
+
 cargo run --bin crabridge -- serve
 ```
 
-### Multi-provider (recommended)
+`serve` listens on `127.0.0.1:11435` with built-in **deepseek** and **kimi** routes. Press **Ctrl-C** to stop.
+
+### Desktop app (recommended for Codex)
 
 ```bash
-export DEEPSEEK_API_KEY=sk-...
-export KIMI_API_KEY=sk-...
-# Configure Codex + crabbridge.toml via desktop Setup Wizard, or hand-edit crabbridge.toml
-./scripts/build-desktop.sh   # macOS: install CrabBridge.app from dist/desktop/
-cargo run --bin crabridge -- serve
+cargo run --bin crabbridge-desktop
 ```
 
-The desktop **Setup Wizard** writes a TOML with both `[providers.deepseek]` and `[providers.kimi]` sections. If you hand-edit `crabbridge.toml`, include a section for **each** provider you want enabled — a file with only `[providers.deepseek]` serves DeepSeek alone.
-
-With **no** config file at all, `serve` defaults to both built-in providers (`deepseek` + `kimi`).
-
-### Single provider
-
-Hand-edit `crabbridge.toml` for one provider, or use the desktop **Setup Wizard** to pick DeepSeek or Kimi.
+On first launch the embedded bridge starts automatically. Open **Setup Wizard** only if you need to switch Codex provider, override a base URL, or store API keys in the keychain — then click **Set as Codex Provider**.
 
 ```bash
-export KIMI_API_KEY=sk-...
-cargo run --bin crabridge -- serve
+./scripts/build-desktop.sh   # release installers → dist/desktop/
 ```
 
-In another terminal:
+### Optional `crabbridge.toml`
+
+Copy `crabbridge.example.toml` when you want to customize bind address, model maps, cache, or per-provider base URLs:
+
+```bash
+cp crabbridge.example.toml ~/.config/crabbridge/config.toml
+crabridge serve --config ~/.config/crabbridge/config.toml
+```
+
+A config with only `[providers.deepseek]` enables DeepSeek alone; empty `[providers.*]` sections still enable both built-in routes.
+
+### Test from another terminal
 
 ```bash
 cargo run --bin crabridge -- prompt "Hello"
@@ -75,7 +77,7 @@ Use **CrabBridge desktop → Check Configuration** (tray menu) to validate Codex
 
 ## Installation
 
-Install scripts build a release binary and set up a config directory.
+Install scripts build a release `crabridge` binary and create a starter config directory.
 
 | Platform | Command |
 |----------|---------|
@@ -97,40 +99,33 @@ Install scripts build a release binary and set up a config directory.
 ./scripts/install-macos.sh
 PREFIX=/usr/local ./scripts/install-linux.sh
 
-# Start after install (export API keys in shell first)
 export DEEPSEEK_API_KEY=sk-...
-crabbridge serve
+crabridge serve
 ```
 
 ```powershell
 # Windows
 $env:DEEPSEEK_API_KEY = "sk-..."
 .\scripts\install-windows.ps1
+
+# Desktop release build (from repo root)
+cd crates\crabbridge-desktop; cargo tauri build
 ```
+
+Install scripts copy `crabbridge.example.toml` when present. API keys belong in your shell environment, not in the generated TOML.
 
 ## Codex Integration
 
-1. Set upstream keys in your shell (Codex reads these via `env_key`):
+1. Export keys in the terminal where you run Codex:
 
    ```bash
    export DEEPSEEK_API_KEY=sk-...
    export KIMI_API_KEY=sk-...
    ```
 
-2. Start CrabBridge:
+2. Start CrabBridge (`crabridge serve` or the desktop app).
 
-   ```bash
-   crabbridge serve
-   ```
-
-3. Configure Codex (recommended — desktop **Setup Wizard** writes `~/.codex/config.toml` and `~/.codex/crabbridge-models-{provider}.json` automatically):
-
-   ```bash
-   ./scripts/build-desktop.sh
-   # Open CrabBridge → Setup Wizard → Set as Codex Provider
-   ```
-
-   Or paste manually into `~/.codex/config.toml`. Multi-provider form:
+3. Point Codex at the bridge — desktop **Setup Wizard → Set as Codex Provider** writes `~/.codex/config.toml` and model catalogs automatically. Or paste manually:
 
    ```toml
    model_provider = "crabbridge-deepseek"
@@ -161,12 +156,6 @@ $env:DEEPSEEK_API_KEY = "sk-..."
 2. `./crabbridge.toml`
 3. `~/.config/crabbridge/config.toml` (Windows: `%APPDATA%\crabbridge\config.toml`)
 
-```bash
-crabridge serve --config ~/.config/crabbridge/config.toml
-```
-
-The config file is loaded via `--config PATH` / `-c PATH` or `CRABRIDGE_CONFIG`.
-
 **Priority:** CLI flags > environment variables > TOML file > built-in defaults.
 
 ### What goes in `crabbridge.toml`
@@ -175,7 +164,6 @@ Bridge TOML configures **routes and server settings**, not upstream API keys:
 
 | Section | Purpose |
 |---------|---------|
-| `default_provider` | Legacy `/v1/*` fallback route |
 | `[providers.{slug}]` | Enable a provider route; optional `base_url`, `model_map` |
 | `[server]` | `bind_addr`, `log_level`, … |
 | `[session]` | SQLite path, TTL, memory-only mode |
@@ -183,27 +171,23 @@ Bridge TOML configures **routes and server settings**, not upstream API keys:
 | `[admin]` | `enabled = true` — local dashboard at `/admin` and Prometheus at `/metrics` |
 
 ```toml
-default_provider = "deepseek"
-
 [providers.deepseek]
 # base_url = "https://api.deepseek.com/v1"
-# model_map = "gpt-5.4:deepseek-v4-pro"
 
 [providers.kimi]
 # base_url = "https://api.kimi.com/coding/v1"
-# model_map = "gpt-5.4:kimi-for-coding"
 
 [server]
 bind_addr = "127.0.0.1:11435"
 ```
 
-Open `http://127.0.0.1:11435/admin` for the local dashboard while `crabridge serve` is running.
+Open `http://127.0.0.1:11435/admin` while `crabridge serve` is running.
 
-Upstream URLs default from the provider slug (`deepseek` → DeepSeek API, `kimi` → Kimi Code API). Override with `base_url` or `CRABRIDGE_{SLUG}_BASE_URL`.
+Upstream URLs default from the provider slug. Override with `base_url` or `CRABRIDGE_{SLUG}_BASE_URL`.
 
-**Model mapping:** Codex model names are mapped per route via `[providers.*.model_map]` or global `[advanced].model_map`. Unmapped names fall back to the provider preset default (`deepseek-v4-pro`, `kimi-for-coding`). Upstream model IDs pass through only when they match the active provider (e.g. `deepseek-v4-pro` on `/kimi/v1` becomes `kimi-for-coding`).
+**Model mapping:** per-route `[providers.*.model_map]` or global `[advanced].model_map`. Unmapped names fall back to provider defaults (`deepseek-v4-pro`, `kimi-for-coding`).
 
-**Sessions:** History is keyed by `response_id` only. The `provider` column in SQLite is metadata (updated on write); Codex can switch `model_provider` mid-session and still resume via `previous_response_id`.
+**Sessions:** History is keyed by `response_id`. The `provider` column in SQLite is metadata; Codex can switch `model_provider` mid-session and still resume via `previous_response_id`.
 
 ### Useful environment variables
 
@@ -213,7 +197,7 @@ Upstream URLs default from the provider slug (`deepseek` → DeepSeek API, `kimi
 | `KIMI_API_KEY` | Kimi Code key — same pattern |
 | `CRABRIDGE_CONFIG` | Path to `crabbridge.toml` |
 | `CRABRIDGE_{SLUG}_BASE_URL` | Override upstream base URL for a route |
-| `CRABRIDGE_DEFAULT_PROVIDER` | Legacy `/v1/*` default slug |
+| `CRABRIDGE_DEFAULT_PROVIDER` | Preferred provider slug in config metadata |
 | `BRIDGE_ADDR` | Server listen address |
 | `SESSION_DB` | SQLite database path |
 | `CRABRIDGE_MODEL_MAP` | Global model map |
@@ -221,23 +205,23 @@ Upstream URLs default from the provider slug (`deepseek` → DeepSeek API, `kimi
 
 ## CLI
 
-The `crabridge` server binary handles the HTTP bridge. Codex setup is done through the **desktop app** (Setup Wizard).
-
 | Binary | Purpose |
 |--------|---------|
-| `crabridge` | Run the HTTP bridge server and send test prompts |
+| `crabridge` | HTTP bridge server (`serve`, `prompt`) |
 | `crabbridge-desktop` | Tray app — Setup Wizard, Settings, embedded bridge |
 
+Codex setup lives in the **desktop app** (`setup.rs`, `codex_config.rs`); there is no separate setup CLI crate.
+
 ```bash
-# Server (crabridge)
-crabridge serve                                # Start the bridge server
-crabridge serve --config crabbridge.toml       # Explicit config path
-crabridge prompt "Hello"                       # Send a test request (uses env key)
+# Server
+crabridge serve
+crabridge serve --config crabbridge.toml
+crabridge prompt "Hello"
 crabridge prompt "Hello" --provider kimi
 
-# Desktop (crabbridge-desktop)
-cargo run --bin crabbridge-desktop             # Tray app with Setup Wizard
-./scripts/build-desktop.sh                     # Release installers → dist/desktop/
+# Desktop
+cargo run --bin crabbridge-desktop
+./scripts/build-desktop.sh
 ```
 
 ## API Endpoints
@@ -250,39 +234,29 @@ cargo run --bin crabbridge-desktop             # Tray app with Setup Wizard
 | `GET` | `/metrics` | Prometheus metrics |
 | `GET` | `/{provider}/v1/models` | Proxy upstream model list |
 | `POST` | `/{provider}/v1/responses` | Responses API (Codex entry point) |
-| `GET/POST` | `/v1/*` | Legacy routes → `default_provider` |
 
 All upstream-bound requests require `Authorization: Bearer <api_key>`. `/v1/chat/completions` is **not** exposed on the bridge.
 
 ## Desktop app (Tauri 2 tray)
 
-Cross-platform **menu-bar / system-tray** app that embeds the HTTP bridge. UI windows: **Welcome** (home + optional setup wizard) and **Settings** (appearance, autostart, logs). On first launch the bridge auto-starts with built-in DeepSeek and Kimi (no config file required).
+Cross-platform **menu-bar / system-tray** app that embeds the HTTP bridge.
 
-The tray icon is loaded programmatically from `icons/32x32.png` (not via `tauri.conf.json` `trayIcon`). If upstream API keys are missing from the environment, `crabridge-server` logs warnings at startup and on requests — Codex must still pass `Authorization: Bearer`.
+| Window | Purpose |
+|--------|---------|
+| **Welcome** | Home (bridge controls, current provider) + optional Setup Wizard |
+| **Settings** | Appearance, autostart, logs |
 
-### Run from source
-
-```bash
-cargo run --bin crabbridge-desktop
-```
-
-### First-run flow
-
-1. Bridge starts automatically in the background (DeepSeek + Kimi built-in).
-2. Welcome opens on **Home** — start/stop bridge, view current provider.
-3. **Setup Wizard** (optional) — switch Codex provider, customize base URL, store API keys in keychain → **Set as Codex Provider**.
-
-Open Codex in your **usual terminal** (where API keys are already exported). The bridge listens at `http://127.0.0.1:11435` by default.
+On first launch the bridge auto-starts with built-in DeepSeek and Kimi — no config file required. Open Codex in your usual terminal (where API keys are exported). Default listen address: `http://127.0.0.1:11435`.
 
 ### Tray menu
 
 | Item | Action |
 |------|--------|
 | Start / Stop Bridge | Control the embedded HTTP server |
-| Open Admin Dashboard | Opens `http://127.0.0.1:11435/admin` |
-| Welcome… | Open home / setup wizard |
+| Open Admin Dashboard | `http://127.0.0.1:11435/admin` |
+| Welcome… | Home / Setup Wizard |
 | Run Codex Setup | Re-run Codex + bridge config writer |
-| Check Configuration | Validates Codex + bridge config |
+| Check Configuration | Validate Codex + bridge config |
 | Settings… | Appearance, autostart, logs |
 
 ### Release bundle
@@ -291,88 +265,44 @@ Open Codex in your **usual terminal** (where API keys are already exported). The
 ./scripts/build-desktop.sh
 ```
 
-Runs `cargo tauri build` (Tauri 2 — release mode is the default; do **not** pass `--release`). Bundle output is written under the workspace target directory: `target/release/bundle/` (or `$CARGO_TARGET_DIR/release/bundle/`). The script copies installers into `dist/desktop/`:
+Runs `cargo tauri build` and copies installers to `dist/desktop/`:
 
-| Platform | Artifacts in `dist/desktop/` |
-|----------|------------------------------|
-| macOS | `crabbridge-desktop-macos.dmg`, `CrabBridge.app`, optional `crabbridge-desktop-macos.app.tar.gz` |
-| Linux | `crabbridge-desktop-linux.AppImage`, `crabbridge-desktop-linux.deb` |
-| Windows | `crabbridge-desktop-windows.msi`, `crabbridge-desktop-windows-setup.exe` |
+| Platform | Artifacts |
+|----------|-----------|
+| macOS | `crabbridge-desktop-macos.dmg`, `CrabBridge.app` |
+| Linux | `crabbridge-desktop-linux.AppImage`, `.deb` |
+| Windows | `crabbridge-desktop-windows.msi`, setup `.exe` |
 
-Requires [tauri-cli](https://v2.tauri.app/) (`cargo install tauri-cli --locked`); the script installs it if missing.
+Requires [tauri-cli](https://v2.tauri.app/) (`cargo install tauri-cli --locked`).
 
 ## Development
 
 ```bash
-cargo build --workspace --release          # server + desktop
-cargo build --release --bin crabridge      # HTTP bridge only
-cargo run --bin crabbridge-desktop         # desktop tray app (Tauri)
-
-# Desktop release bundle (installers → dist/desktop/; requires tauri-cli)
-./scripts/build-desktop.sh
+cargo build --workspace --release
+cargo run --bin crabridge -- serve
+cargo run --bin crabbridge-desktop
 
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
 ```
 
-For architecture details and module design, see [AGENT_SPEC.md](AGENT_SPEC.md).
+Cross-compile server binaries: `./build-release.sh` → `dist/`.
+
+For architecture details, see [AGENT_SPEC.md](AGENT_SPEC.md).
 
 ## Project Layout
 
 ```
 crab-bridge-rs/
-├── Cargo.toml                    # workspace root
+├── Cargo.toml
+├── crabbridge.example.toml
+├── build-release.sh              # cross-compile crabridge → dist/
 ├── crates/
-│   ├── crabbridge-core/          # shared types, config, provider, runtime
-│   │   └── src/
-│   │       ├── types.rs          # Responses + Chat Completions types
-│   │       ├── provider.rs       # DeepSeek / Kimi presets
-│   │       ├── config.rs         # TOML load + provider resolution
-│   │       └── runtime.rs        # shared init + Tokio block_on
-│   ├── crabbridge-server/        # HTTP bridge binary (crabridge)
-│       ├── static/admin.html     # embedded admin dashboard
-│       ├── tests/integration.rs  # mockito integration tests
-│       └── src/
-│           ├── main.rs           # thin entry
-│           ├── serve.rs          # library API: start_serve / ServeHandle
-│           ├── server.rs         # serve / prompt handlers
-│           ├── opts.rs           # Clap for crabridge
-│           ├── app.rs            # Router construction
-│           ├── admin.rs          # /admin dashboard + /metrics
-│           ├── metrics.rs        # Runtime counters + Prometheus export
-│           ├── handlers.rs       # HTTP routes
-│           ├── translate.rs      # Responses ↔ Chat conversion
-│           ├── stream.rs         # Streaming SSE translation
-│           ├── session.rs        # Session store
-│           ├── session_sqlite.rs # SQLite persistence
-│           └── ...
-│   └── crabbridge-desktop/       # desktop tray app (crabbridge-desktop)
-│       ├── tauri.conf.json
-│       ├── icons/
-│       ├── static/settings.html  # settings window (API keys, autostart, checks)
-│       ├── static/welcome.html   # first-run onboarding wizard
-│       └── src/
-│           ├── main.rs           # thin entry
-│           ├── lib.rs            # tray + Tauri commands
-│           ├── bridge.rs         # embedded server lifecycle
-│           ├── onboarding.rs     # first-run wizard orchestration
-│           ├── prefs.rs          # desktop-prefs.json
-│           ├── env_export.rs     # env.sh + zsh hook
-│           ├── secrets.rs        # keychain API key storage
-│           ├── autostart.rs      # launch at login
-│           ├── settings.rs       # settings / welcome windows
-│           ├── tray.rs           # system tray menu
-│           ├── setup.rs          # Codex + bridge setup
-│           ├── codex_config.rs   # model catalog writer
-│           ├── provider_config.rs # per-provider UI settings
-│           └── dock.rs           # macOS dock icon
-├── scripts/
-│   ├── build-desktop.sh          # cargo tauri build → dist/desktop/
-│   ├── generate-desktop-icons.py
-│   ├── install-macos.sh
-│   ├── install-linux.sh
-│   ├── install-unix.sh
-│   └── install-windows.ps1
-├── build-release.sh              # cross-compile crabridge server → dist/
-└── crabbridge.example.toml
+│   ├── crabbridge-core/          # types, config, provider, runtime
+│   ├── crabbridge-server/        # crabridge binary (HTTP bridge)
+│   └── crabbridge-desktop/       # crabbridge-desktop (Tauri tray app)
+└── scripts/
+    ├── build-desktop.sh
+    ├── install-macos.sh / install-linux.sh / install-unix.sh
+    └── install-windows.ps1
 ```
