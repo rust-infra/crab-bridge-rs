@@ -75,15 +75,7 @@ crab-bridge-rs/
 │   │       ├── provider.rs         # DeepSeek / Kimi presets, route slugs, model matching
 │   │       ├── config.rs           # crabbridge.toml load + provider resolution
 │   │       └── runtime.rs          # shared init + Tokio block_on
-│   ├── crabbridge-cli/             # crabridge-cli binary + library
-│   │   └── src/
-│   │       ├── main.rs             # thin entry
-│   │       ├── lib.rs
-│   │       ├── cli.rs              # setup / print-codex-config handlers
-│   │       ├── cli_opts.rs         # Clap for crabridge-cli (CrabridgeCli)
-│   │       ├── codex_config.rs     # Fetches upstream /models, writes Codex snippets
-│   │       └── setup.rs            # setup + setup --docker config checks
-│   └── crabbridge-server/          # crabridge binary + library
+│   ├── crabbridge-server/          # crabridge binary + library
 │       ├── static/
 │       │   └── admin.html          # embedded admin dashboard
 │       ├── tests/
@@ -118,13 +110,20 @@ crab-bridge-rs/
 │           ├── tray.rs             # system tray menu + programmatic icon
 │           ├── onboarding.rs       # first-run wizard orchestration
 │           ├── settings.rs         # settings / welcome windows
-│           └── setup_wizard.rs     # Codex setup from desktop
+│           ├── setup.rs            # Codex + bridge setup
+│           ├── codex_config.rs     # model catalog writer
+│           ├── provider_config.rs  # per-provider UI settings
+│           └── dock.rs             # macOS dock icon
 ├── scripts/
 │   ├── build-desktop.sh            # cargo tauri build → dist/desktop/
-│   └── generate-desktop-icons.py
+│   ├── generate-desktop-icons.py
+│   ├── install-macos.sh
+│   ├── install-linux.sh
+│   ├── install-unix.sh
+│   └── install-windows.ps1
 ```
 
-**Crate dependencies**: `crabbridge-cli` → `crabbridge-core`; `crabbridge-server` → `crabbridge-core`; `crabbridge-desktop` → `crabbridge-core`, `crabbridge-cli`, `crabbridge-server`. The CLI crate does not depend on axum, rusqlite, or moka.
+**Crate dependencies**: `crabbridge-server` → `crabbridge-core`; `crabbridge-desktop` → `crabbridge-core`, `crabbridge-server`. Setup logic lives in `crabbridge-desktop` (`setup.rs`, `codex_config.rs`).
 
 ---
 
@@ -139,28 +138,18 @@ crab-bridge-rs/
 | `serve` | Start the HTTP bridge server (`ServeArgs`) |
 | `prompt` | Send a test request to `/{provider}/v1/responses` |
 
-**`crabridge-cli`** (`crabbridge-cli::cli_opts`):
-
-| Subcommand | Description |
-|------------|-------------|
-| `setup` | Write Codex config + optional `crabbridge.toml` |
-| `setup --docker` | Read-only configuration check |
-| `print-codex-config` | Print Codex `config.toml` snippet(s) |
-
-**`crabbridge-desktop`** (Tauri 2 tray app):
+**`crabbridge-desktop`** (Tauri 2 tray app — includes Codex setup):
 
 | Surface | Description |
 |---------|-------------|
-| Welcome window | Home + first-run setup wizard (`welcome.html`) |
-| Settings window | API keys, autostart, logs, bridge controls (`settings.html`) |
-| Tray menu | Start/stop bridge, open admin, Quick Setup, Codex setup, config check |
-| IPC | `bridge_restart`, `onboarding_finish`, `bridge_start`/`bridge_stop`, secrets, provider config |
+| Welcome window | Home + optional setup wizard (`welcome.html`) |
+| Settings window | Appearance, autostart, logs (`settings.html`) |
+| Tray menu | Start/stop bridge, open admin, welcome, Run Codex Setup, config check |
+| IPC | `bridge_start`/`bridge_stop`/`bridge_restart`, secrets, provider config, onboarding |
 
-Onboarding finish restarts the embedded bridge so new config takes effect. Tray icon is embedded from `icons/32x32.png` at runtime (not `tauri.conf.json` `trayIcon`). Missing upstream API keys produce `warn!` logs in `crabbridge-server` at startup (`serve.rs`) and per-request (`handlers.rs`).
+On first launch the desktop app auto-starts the embedded bridge (built-in DeepSeek + Kimi; no config file required). Tray icon is embedded from `icons/32x32.png` at runtime (not `tauri.conf.json` `trayIcon`). Missing upstream API keys produce `warn!` logs in `crabbridge-server` at startup (`serve.rs`) and per-request (`handlers.rs`).
 
-**Global flags** (CLI binaries): `-c` / `--config PATH` (also `CRABRIDGE_CONFIG`).
-
-**Setup flags**: `--provider deepseek\|kimi`, `--all-providers`, `--providers=kimi,deepseek`.
+**Global flags** (crabridge server): `-c` / `--config PATH` (also `CRABRIDGE_CONFIG`).
 
 Priority: **CLI flags > environment variable > TOML file > built-in defaults**.
 
@@ -271,14 +260,13 @@ Write paths pass `provider` slug to update the indexed column: `save_with_id(pro
 
 No schema migration code — greenfield `init_schema()` on open.
 
-### 4.7 `crabbridge-cli::setup`
+### 4.7 `crabbridge-desktop::setup`
 
-Invoked by **`crabridge-cli setup`**:
+Invoked by **desktop Setup Wizard** (`onboarding_run_setup`, tray **Run Codex Setup**):
 
-- `setup --all-providers`: writes both Codex entries + multi-provider `crabbridge.toml` (empty `[providers.*]` stubs)
-- `setup --providers=kimi,deepseek`: same, explicit slug list
-- `setup --provider kimi`: single provider only
-- `setup --docker`: validates Codex config, catalogs, env keys, and `GET /{slug}/v1` reachability
+- Writes Codex `~/.codex/config.toml` entries + model catalogs for built-in providers
+- Writes multi-provider `crabbridge.toml` on first run
+- **Check Configuration** (tray menu) validates Codex config, catalogs, env keys, and bridge reachability
 
 Codex provider names: `crabbridge-deepseek`, `crabbridge-kimi` (see `ProviderKind::codex_provider_name`).
 
@@ -311,7 +299,7 @@ Handlers record metrics via `record_http_outcome()` in `handlers.rs`.
 
 - **`crabbridge-server::cache`**: Non-streaming response cache (moka); cache key includes provider + Bearer token hash
 - **`crabbridge-server::upstream_request`**: Upstream JSON body + `CRABRIDGE_TOOL_DENYLIST`
-- **`crabbridge-cli::codex_config`**: Fetches upstream `/models`, writes `~/.codex/crabbridge-models-{slug}.json`
+- **`crabbridge-desktop::codex_config`**: Fetches upstream `/models`, writes `~/.codex/crabbridge-models-{slug}.json`
 - **`crabbridge-server::prompt`**: `ResponsesSseParser` for CLI streaming output
 
 ---
@@ -388,12 +376,10 @@ crabridge serve
 crabridge serve --config crabbridge.toml
 crabridge prompt "Hello" --provider deepseek
 
-# crabridge-cli — Codex setup
-crabridge-cli setup --all-providers
-crabridge-cli setup --providers=kimi,deepseek
-crabridge-cli setup --docker
-crabridge-cli print-codex-config --provider kimi
-crabridge-cli print-codex-config --all-providers
+# crabbridge-desktop — Codex setup
+cargo run --bin crabbridge-desktop
+# Tray → Welcome / Run Codex Setup / Check Configuration
+./scripts/build-desktop.sh
 ```
 
 ---

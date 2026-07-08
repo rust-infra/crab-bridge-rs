@@ -10,7 +10,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 $BinaryName = "crabridge.exe"
-$CliBinaryName = "crabridge-cli.exe"
 
 function Show-Usage {
     Write-Host @"
@@ -26,7 +25,7 @@ Options:
   -Help              Show this help
 
 Environment:
-  DEEPSEEK_API_KEY   If set, written into the generated config.toml
+  (API keys are not written into config.toml — export DEEPSEEK_API_KEY / KIMI_API_KEY in your shell)
 
 Examples:
   powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
@@ -58,7 +57,6 @@ function Build-Binary([string]$SourceDir) {
     Push-Location $SourceDir
     try {
         cargo build --release --bin $BinaryName
-        cargo build --release --bin "crabridge-cli"
     } finally {
         Pop-Location
     }
@@ -66,18 +64,12 @@ function Build-Binary([string]$SourceDir) {
 
 function Install-Binary([string]$SourceDir, [string]$BinDir) {
     $src = Join-Path $SourceDir "target\release\$BinaryName"
-    $cliSrc = Join-Path $SourceDir "target\release\$CliBinaryName"
     if (-not (Test-Path $src)) {
         throw "Binary not found at $src. Run build first."
     }
-    if (-not (Test-Path $cliSrc)) {
-        throw "Binary not found at $cliSrc. Run build first."
-    }
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     Copy-Item -Force $src (Join-Path $BinDir $BinaryName)
-    Copy-Item -Force $cliSrc (Join-Path $BinDir $CliBinaryName)
     Write-Step "Installed $(Join-Path $BinDir $BinaryName)"
-    Write-Step "Installed $(Join-Path $BinDir $CliBinaryName)"
 }
 
 function Install-Config([string]$RepoRoot, [string]$TargetConfigDir) {
@@ -98,14 +90,8 @@ function Install-Config([string]$RepoRoot, [string]$TargetConfigDir) {
 default_provider = "deepseek"
 
 [providers.deepseek]
-api_key = "sk-your-api-key-here"
-base_url = "https://api.deepseek.com/v1"
-model = "deepseek-v4-pro"
 
 [providers.kimi]
-api_key = "sk-your-kimi-code-key"
-base_url = "https://api.kimi.com/coding/v1"
-model = "kimi-for-coding"
 
 [server]
 bind_addr = "127.0.0.1:11435"
@@ -114,14 +100,11 @@ log_level = "info"
 [session]
 db = "data/crabbridge.db"
 memory_only = false
+
+[admin]
+enabled = true
 "@ | Set-Content -Path $configFile -Encoding UTF8
     }
-
-    $content = Get-Content $configFile -Raw
-    if ($env:DEEPSEEK_API_KEY) {
-        $content = $content -replace '(?m)^api_key = .*', "api_key = `"$($env:DEEPSEEK_API_KEY)`""
-    }
-    Set-Content -Path $configFile -Value $content.TrimEnd() -Encoding UTF8
 
     Write-Step "Created config: $configFile"
 }
@@ -144,15 +127,17 @@ function Show-NextSteps([string]$BinDir, [string]$TargetConfigDir, [string]$ExeP
 CrabBridge installed successfully.
 
   Binary:  $ExePath
-           $(Join-Path (Split-Path $ExePath) $CliBinaryName)
   Config:  $(Join-Path $TargetConfigDir "config.toml")
 
 Next steps:
-  1. Edit $(Join-Path $TargetConfigDir "config.toml") and set upstream.api_key
+  1. Export API keys in your shell (Codex reads these via env_key):
+       `$env:DEEPSEEK_API_KEY = "sk-..."
+       `$env:KIMI_API_KEY = "sk-..."
   2. Start the bridge:
        $ExePath serve
-  3. Configure Codex:
-       $(Join-Path (Split-Path $ExePath) $CliBinaryName) setup
+  3. Configure Codex (recommended):
+       cd crates\crabbridge-desktop; cargo tauri build
+       Open CrabBridge → Setup Wizard → Set as Codex Provider
   4. Test:
        $ExePath prompt "Hello"
 "@

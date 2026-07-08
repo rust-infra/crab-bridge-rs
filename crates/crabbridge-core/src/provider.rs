@@ -2,7 +2,6 @@
 
 use std::{env, fmt::Display};
 
-use anyhow::{Result, bail};
 use reqwest::{RequestBuilder, Url};
 use tracing::warn;
 
@@ -79,46 +78,6 @@ impl ProviderKind {
 
     pub fn builtin_slugs() -> &'static [&'static str] {
         &["deepseek", "kimi"]
-    }
-
-    /// Resolve provider slugs for `crabridge-cli setup` / `print-codex-config` from CLI flags.
-    pub fn resolve_setup_slugs(
-        all_providers: bool,
-        providers: Option<&[String]>,
-        single: &str,
-    ) -> Result<Vec<String>> {
-        if let Some(list) = providers {
-            if list.is_empty() {
-                bail!("--providers requires at least one provider (e.g. kimi,deepseek)");
-            }
-            let mut slugs = Vec::with_capacity(list.len());
-            for raw in list {
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                let kind = Self::from_route(trimmed).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "unknown provider {trimmed:?} in --providers (use deepseek, kimi)"
-                    )
-                })?;
-                let slug = kind.route_slug().to_string();
-                if !slugs.contains(&slug) {
-                    slugs.push(slug);
-                }
-            }
-            if slugs.is_empty() {
-                bail!("--providers requires at least one provider (e.g. kimi,deepseek)");
-            }
-            Ok(slugs)
-        } else if all_providers {
-            Ok(Self::builtin_slugs()
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect())
-        } else {
-            Ok(vec![Self::parse(single).route_slug().to_string()])
-        }
     }
 
     pub fn default_base_url(self) -> &'static str {
@@ -408,31 +367,6 @@ mod tests {
     fn route_slug_and_codex_name() {
         assert_eq!(ProviderKind::DeepSeek.route_slug(), "deepseek");
         assert_eq!(ProviderKind::codex_provider_name("kimi"), "crabbridge-kimi");
-    }
-
-    #[test]
-    fn resolve_setup_slugs_from_flags() {
-        assert_eq!(
-            ProviderKind::resolve_setup_slugs(true, None, "deepseek").unwrap(),
-            vec!["deepseek", "kimi"]
-        );
-        assert_eq!(
-            ProviderKind::resolve_setup_slugs(
-                false,
-                Some(&["kimi".into(), "deepseek".into()]),
-                "deepseek"
-            )
-            .unwrap(),
-            vec!["kimi", "deepseek"]
-        );
-        assert_eq!(
-            ProviderKind::resolve_setup_slugs(false, None, "kimi").unwrap(),
-            vec!["kimi"]
-        );
-        assert!(
-            ProviderKind::resolve_setup_slugs(false, Some(&["unknown".into()]), "deepseek")
-                .is_err()
-        );
     }
 
     #[test]

@@ -803,23 +803,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crabbridge-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "crabbridge-core",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
- "toml 0.8.23",
- "toml_edit 0.22.27",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "crabbridge-core"
 version = "0.1.0"
 dependencies = [
@@ -839,11 +822,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
- "crabbridge-cli",
  "crabbridge-core",
  "crabbridge-server",
  "keyring",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "open",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tauri",
@@ -853,9 +839,11 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-single-instance",
  "tokio",
+ "toml 0.8.23",
  "toml_edit 0.22.27",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

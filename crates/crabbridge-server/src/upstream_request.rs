@@ -17,18 +17,6 @@ impl UpstreamRequestConfig {
         })
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.extra_params.is_empty() && self.drop_params.is_empty()
-    }
-
-    pub fn extra_param_count(&self) -> usize {
-        self.extra_params.len()
-    }
-
-    pub fn drop_param_count(&self) -> usize {
-        self.drop_params.len()
-    }
-
     pub fn request_body(&self, chat_req: &ChatRequest) -> Result<Value> {
         let mut body = serde_json::to_value(chat_req)?;
         let object = body

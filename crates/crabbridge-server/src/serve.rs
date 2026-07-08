@@ -42,10 +42,6 @@ impl ServeHandle {
         format!("http://{}/admin", self.bind_addr)
     }
 
-    pub fn health_url(&self) -> String {
-        format!("http://{}/health", self.bind_addr)
-    }
-
     pub fn is_finished(&self) -> bool {
         self.join.is_finished()
     }
@@ -54,6 +50,14 @@ impl ServeHandle {
     pub async fn take_join_result(mut self) -> Result<()> {
         self.shutdown.take();
         self.join.await.context("bridge server task panicked")?
+    }
+
+    /// Wait until the server task finishes on its own (e.g. an error).
+    ///
+    /// Unlike [`ServeHandle::shutdown`], this does not signal a shutdown; it
+    /// blocks the caller so foreground hosts stay alive while the server runs.
+    pub async fn wait(&mut self) -> Result<()> {
+        (&mut self.join).await.context("bridge server task panicked")?
     }
 
     /// Stop the server and wait for the background task to finish.
@@ -102,9 +106,16 @@ pub async fn start_serve(
     let metrics = BridgeMetrics::new();
     let resolved_path = resolve_config_path(config_path);
     let cfg = match &resolved_path {
-        Some(path) => {
+        Some(path) if path.is_file() => {
             info!(config = %path.display(), "using bridge config");
             Some(load_config_file(path)?)
+        }
+        Some(path) => {
+            info!(
+                config = %path.display(),
+                "config path set but file missing; using built-in providers"
+            );
+            None
         }
         None => None,
     };

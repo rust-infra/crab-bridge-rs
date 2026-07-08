@@ -28,7 +28,16 @@ pub async fn run(cli: BridgeCli, config_path: Option<PathBuf>) -> Result<()> {
 }
 
 async fn run_serve(serve: ServeArgs, config_path: Option<PathBuf>) -> Result<()> {
-    let handle = start_serve(serve, config_path, true).await?;
+    let mut handle = start_serve(serve, config_path, true).await?;
+
+    tokio::select! {
+        result = handle.wait() => return result,
+        signal = tokio::signal::ctrl_c() => {
+            signal.context("failed to listen for shutdown signal")?;
+        }
+    }
+
+    tracing::info!("shutdown signal received; stopping bridge");
     handle.shutdown().await
 }
 
