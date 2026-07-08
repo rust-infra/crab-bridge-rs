@@ -1,15 +1,20 @@
 //! System tray menu and status labels.
 
 use anyhow::{Context, Result};
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::image::Image;
 use tauri::{App, AppHandle, Wry};
 
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/32x32.png");
+const APP_ICON_BYTES: &[u8] = include_bytes!("../icons/icon.png");
 
 pub fn load_tray_icon() -> Result<Image<'static>> {
     Image::from_bytes(TRAY_ICON_BYTES).context("failed to decode tray icon (32x32.png)")
+}
+
+pub fn load_app_icon() -> Result<Image<'static>> {
+    Image::from_bytes(APP_ICON_BYTES).context("failed to decode app icon (icon.png)")
 }
 
 pub const MENU_START: &str = "start";
@@ -62,7 +67,10 @@ pub fn refresh_tray_menu(app: &AppHandle, running: bool) -> tauri::Result<()> {
     Ok(())
 }
 
-pub fn setup_tray(app: &App, on_menu_event: impl Fn(AppHandle, tauri::menu::MenuEvent) + Send + Sync + 'static) -> Result<()> {
+pub fn setup_tray(
+    app: &App,
+    on_menu_event: impl Fn(AppHandle, tauri::menu::MenuEvent) + Send + Sync + 'static,
+) -> Result<()> {
     if app.tray_by_id("main").is_some() {
         return Ok(());
     }

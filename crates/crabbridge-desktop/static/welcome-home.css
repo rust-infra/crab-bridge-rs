@@ -1,28 +1,32 @@
-/* Welcome home — status-first layout for returning users */
+/* Welcome home — Codex status-first dashboard */
 
 .home-hero {
   text-align: center;
-  padding: 8px 0 4px;
+  padding: 6px 0 2px;
 }
 
 .home-hero .status-pill {
   font-size: 12px;
   padding: 4px 12px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .home-hero h2 {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 600;
-  letter-spacing: -0.02em;
-  margin: 0 0 8px;
+  letter-spacing: -0.022em;
+  margin: 0 0 6px;
+  color: var(--ink);
 }
 
 .home-hero .home-subtitle {
   color: var(--text-secondary);
-  font-size: 14px;
-  margin: 0 0 20px;
+  font-size: 13px;
+  margin: 0 0 18px;
   line-height: 1.5;
+  max-width: min(480px, 100%);
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .home-actions {
@@ -30,39 +34,14 @@
   gap: 8px;
   flex-wrap: wrap;
   justify-content: center;
-  margin-top: 16px;
-}
-
-.home-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.home-meta-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 12px;
-  font-size: 13px;
-}
-
-.home-meta-row .label {
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-
-.home-meta-row .value {
-  font-weight: 500;
-  text-align: right;
-  word-break: break-all;
+  margin-top: 4px;
 }
 
 .home-footer-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  margin-top: 20px;
+  margin-top: 16px;
 }
 
 .view-setup[hidden],
@@ -74,7 +53,42 @@
   font-size: 22px;
 }
 
-.setup-only-hint {
-  margin-top: -6px;
-  margin-bottom: 8px;
+.welcome-header.is-home .welcome-mark {
+  width: 36px;
+  height: 36px;
+  font-size: 16px;
+  margin-bottom: 12px;
+}
+
+.setup-panel-header {
+  margin-bottom: 4px;
+}
+
+.setup-panel-header .step-badge {
+  margin-bottom: 6px;
+}
+
+.setup-panel-header h2 {
+  font-size: 15px;
+  letter-spacing: -0.015em;
+}
+
+.provider-panel .action-bar {
+  margin-top: 18px;
+}
+
+.view-setup > .provider-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.view-setup > .provider-panel .action-bar {
+  margin-top: auto;
+  padding-top: 18px;
+}
+
+.view-setup > .provider-panel .provider-form-fields {
+  flex: 1;
 }

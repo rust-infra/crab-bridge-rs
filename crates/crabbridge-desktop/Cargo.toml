@@ -18,9 +18,10 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 anyhow.workspace = true
-crabbridge-cli.workspace = true
 crabbridge-core.workspace = true
 crabbridge-server.workspace = true
+reqwest.workspace = true
+toml.workspace = true
 keyring = "3"
 open = "5"
 serde.workspace = true
@@ -36,6 +37,14 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "registry"] }
 arboard = "3"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData"] }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+[dev-dependencies]
+uuid.workspace = true

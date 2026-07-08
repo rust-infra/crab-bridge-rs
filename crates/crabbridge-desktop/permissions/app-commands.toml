@@ -13,6 +13,7 @@ commands.allow = [
   "secrets_clear",
   "provider_config_get",
   "provider_config_save",
+  "set_active_codex_provider",
   "autostart_get",
   "autostart_set",
   "config_check",

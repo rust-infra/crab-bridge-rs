@@ -73,10 +73,7 @@ pub fn install_zsh_hook(config_dir: &Path) -> Result<String> {
         let existing = fs::read_to_string(&zshrc)
             .with_context(|| format!("failed to read {}", zshrc.display()))?;
         if existing.contains(ZSHRC_MARKER) {
-            return Ok(format!(
-                "Shell hook already present in {}",
-                zshrc.display()
-            ));
+            return Ok(format!("Shell hook already present in {}", zshrc.display()));
         }
         let mut file = OpenOptions::new()
             .append(true)

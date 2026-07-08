@@ -1,39 +1,66 @@
-/* Provider selector — native segmented control style */
+/* Provider setup — Codex segmented control + form panel */
 
 .provider-list {
-  display: inline-flex;
+  display: flex;
   gap: 2px;
   padding: 3px;
   background: var(--segment-bg);
   border-radius: var(--radius-sm);
-  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  margin-bottom: 8px;
+  width: 100%;
 }
 
-.provider-chip {
+button.provider-chip {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
   border: none;
   background: transparent;
   color: var(--text-secondary);
   border-radius: 6px;
-  padding: 6px 14px;
+  padding: 7px 12px;
   cursor: pointer;
   font-family: var(--font);
   font-size: 13px;
   font-weight: 500;
-  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
 }
 
-.provider-chip:hover:not(.active) {
-  color: var(--text);
+button.provider-chip:hover:not(:disabled):not(.selected) {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
 }
 
-.provider-chip.active {
-  background: var(--bg-elevated);
-  color: var(--text);
+/* Visual selection = provider whose form is currently shown */
+button.provider-chip.selected,
+button.provider-chip.selected:hover:not(:disabled) {
+  background: var(--surface-elevated);
+  color: var(--ink);
   font-weight: 600;
   box-shadow: var(--chip-shadow);
 }
 
-.provider-chip.configured:not(.active)::after {
+button.provider-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+button.provider-chip.selected:focus-visible {
+  box-shadow: var(--chip-shadow), 0 0 0 3px var(--accent-ring);
+}
+
+:root[data-theme="dark"] button.provider-chip.selected,
+:root[data-theme="dark"] button.provider-chip.selected:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 8%, var(--surface-elevated));
+}
+
+/* Green dot = ready/configured, but not the chip currently being edited */
+button.provider-chip.configured:not(.selected):not(.current)::after {
   content: "";
   display: inline-block;
   width: 5px;
@@ -44,13 +71,28 @@
   vertical-align: middle;
 }
 
+.provider-selector-hint {
+  margin: 0 0 16px;
+  min-height: 1.4em;
+}
+
+.provider-form-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
 .provider-panel .field-label,
 .provider-panel label.field-label {
   display: block;
   font-size: 12px;
   font-weight: 500;
   color: var(--text-secondary);
-  margin: 12px 0 6px;
+  margin: 14px 0 6px;
+}
+
+.provider-panel .field-label:first-of-type {
+  margin-top: 0;
 }
 
 .provider-panel input[type="password"],
@@ -59,7 +101,24 @@
   margin-bottom: 0;
 }
 
-.provider-panel .field-hint#provider-default-hint {
-  margin-top: -8px;
-  margin-bottom: 4px;
+.provider-panel .field-hint {
+  margin: 5px 0 0;
+}
+
+.provider-panel .card-desc {
+  margin-bottom: 16px;
+  padding-bottom: 0;
+}
+
+.provider-panel .status-line {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.provider-panel .status-line:empty {
+  display: none;
+  margin: 0;
+  padding: 0;
+  border: none;
 }

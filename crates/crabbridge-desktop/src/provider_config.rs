@@ -9,8 +9,11 @@ use crabbridge_core::config::{self, BridgeConfigFile};
 use crabbridge_core::provider::ProviderKind;
 use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, value};
+use tracing::warn;
 
+use crate::codex_config::{catalog_path_for_slug, codex_home_dir};
 use crate::secrets::{self, hydrate_api_keys};
+use crate::setup::merge_codex_config;
 
 const SETTINGS_FILE: &str = "provider-settings.json";
 
@@ -76,8 +79,8 @@ fn load_settings_file(config_dir: &Path) -> Result<ProviderSettingsFile> {
     if !path.is_file() {
         return Ok(ProviderSettingsFile::default());
     }
-    let body = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let body =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_str(&body).with_context(|| format!("failed to parse {}", path.display()))
 }
 
@@ -128,7 +131,11 @@ fn stored_base_url(
         })
 }
 
-fn resolve_base_url(slug: &str, bridge: Option<&BridgeConfigFile>, settings: &ProviderSettingsFile) -> String {
+fn resolve_base_url(
+    slug: &str,
+    bridge: Option<&BridgeConfigFile>,
+    settings: &ProviderSettingsFile,
+) -> String {
     stored_base_url(slug, bridge, settings).unwrap_or_else(|| {
         ProviderKind::from_route(slug)
             .unwrap_or(ProviderKind::Custom)
@@ -162,6 +169,9 @@ fn is_configured(
     settings: &ProviderSettingsFile,
     env_key: &str,
 ) -> Result<bool> {
+    if ProviderKind::builtin_slugs().contains(&slug) {
+        return Ok(true);
+    }
     let has_custom_url = stored_base_url(slug, bridge, settings).is_some();
     let in_bridge = bridge
         .map(|c| c.providers.contains_key(slug))
@@ -170,7 +180,11 @@ fn is_configured(
     Ok(has_custom_url || in_bridge || key_ok)
 }
 
-pub fn snapshot(config_dir: &Path, bridge_config_path: &Path, selected_slug: Option<&str>) -> Result<ProviderConfigSnapshot> {
+pub fn snapshot(
+    config_dir: &Path,
+    bridge_config_path: &Path,
+    selected_slug: Option<&str>,
+) -> Result<ProviderConfigSnapshot> {
     hydrate_api_keys()?;
     let settings = load_settings_file(config_dir)?;
     let bridge = load_bridge_config(bridge_config_path)?;
@@ -262,6 +276,32 @@ pub fn save(
         base_url,
     )?;
 
+    if request.set_active {
+        match codex_home_dir() {
+            Some(codex_home) => {
+                let codex_config_path = codex_home.join("config.toml");
+                let codex_provider_name = ProviderKind::codex_provider_name(&request.slug);
+                let catalog_path = catalog_path_for_slug(&request.slug);
+                let bridge_base_url = format!("http://{}/{}/v1", bind_addr, request.slug);
+                let kind = provider_kind(&request.slug)?;
+                merge_codex_config(
+                    &codex_config_path,
+                    &codex_provider_name,
+                    &catalog_path,
+                    &bridge_base_url,
+                    kind.codex_env_key(),
+                    true,
+                )?;
+            }
+            None => {
+                warn!(
+                    slug = %request.slug,
+                    "Cannot update Codex config: home directory not resolved (HOME/CODEX_HOME unset)"
+                );
+            }
+        }
+    }
+
     snapshot(config_dir, bridge_config_path, Some(&request.slug))
 }
 
@@ -323,5 +363,17 @@ mod tests {
         let settings = ProviderSettingsFile::default();
         let url = resolve_base_url("deepseek", None, &settings);
         assert_eq!(url, "https://api.deepseek.com/v1");
+    }
+
+    #[test]
+    fn builtin_providers_are_configured_by_default() {
+        let settings = ProviderSettingsFile::default();
+        for slug in ProviderKind::builtin_slugs() {
+            let kind = provider_kind(slug).unwrap();
+            assert!(
+                is_configured(slug, None, &settings, kind.codex_env_key()).unwrap(),
+                "{slug} should be configured by default"
+            );
+        }
     }
 }

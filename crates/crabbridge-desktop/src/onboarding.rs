@@ -11,7 +11,7 @@ use crate::bridge::BridgeManager;
 use crate::env_export;
 use crate::prefs;
 use crate::secrets;
-use crate::setup_wizard;
+use crate::setup;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -37,7 +37,9 @@ pub fn status(
         bind_addr: manager.bind_addr().to_string(),
         admin_url: manager.admin_url(),
         secrets: secrets::list_secret_status()?,
-        env_script_path: env_export::env_script_path(config_dir).display().to_string(),
+        env_script_path: env_export::env_script_path(config_dir)
+            .display()
+            .to_string(),
     })
 }
 
@@ -47,7 +49,7 @@ pub async fn run_setup_and_export(
     config_path: PathBuf,
 ) -> Result<String> {
     secrets::hydrate_api_keys()?;
-    setup_wizard::run_desktop_setup(bind_addr, config_path, false).await?;
+    setup::run_desktop_setup(bind_addr, config_path, false).await?;
     let env_path = env_export::write_env_script(config_dir)?;
     Ok(env_path.display().to_string())
 }
@@ -61,9 +63,5 @@ pub async fn finish_onboarding(
         .await
         .context("failed to restart bridge with updated configuration")?;
     prefs::mark_onboarding_complete(config_dir)?;
-    status(
-        config_dir,
-        &manager.config_path(),
-        manager.as_ref(),
-    )
+    status(config_dir, &manager.config_path(), manager.as_ref())
 }

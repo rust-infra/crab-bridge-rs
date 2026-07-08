@@ -55,10 +55,13 @@
       for (const item of snapshot.providers) {
         const btn = document.createElement("button");
         btn.type = "button";
+        const isSelected = item.slug === selectedSlug;
         btn.className =
           "provider-chip" +
-          (item.is_active ? " active" : "") +
+          (isSelected ? " selected" : "") +
+          (item.is_active ? " current" : "") +
           (item.configured ? " configured" : "");
+        btn.setAttribute("aria-pressed", isSelected ? "true" : "false");
         btn.textContent = item.is_active
           ? tr("provider.chip.current", { label: item.label })
           : item.label;
@@ -77,64 +80,25 @@
       return snapshot;
     }
 
-    function buildSaveRequest() {
+    async function applyProvider() {
       const selected = providerSnapshot?.selected;
       if (!selected) return null;
       const apiKeyInput = byId("provider-api-key");
-      return {
+      const request = {
         slug: selected.slug,
         baseUrl: byId("provider-base-url").value.trim(),
         setActive: true,
         apiKey: apiKeyInput.readOnly ? null : apiKeyInput.value.trim() || null,
       };
-    }
-
-    async function save() {
-      const request = buildSaveRequest();
-      if (!request) return null;
       const snapshot = await invoke("provider_config_save", { request });
       renderProviderList(snapshot);
-      setMessage(tr("provider.msg.saved_current", { label: snapshot.selected.label }));
+      setMessage("");
       return snapshot;
-    }
-
-    async function saveAndStart() {
-      const request = buildSaveRequest();
-      if (!request) return null;
-      const snapshot = await invoke("provider_config_save", { request });
-      renderProviderList(snapshot);
-      await invoke("bridge_restart");
-      setMessage(tr("provider.msg.saved_started", { label: snapshot.selected.label }));
-      return snapshot;
-    }
-
-    function bindSaveButton(buttonId) {
-      byId(buttonId).addEventListener("click", async () => {
-        try {
-          await save();
-          setMessage(tr("provider.msg.saved"));
-        } catch (err) {
-          setMessage(String(err));
-        }
-      });
-    }
-
-    function bindSaveAndStartButton(buttonId) {
-      byId(buttonId).addEventListener("click", async () => {
-        try {
-          await saveAndStart();
-        } catch (err) {
-          setMessage(String(err));
-        }
-      });
     }
 
     return {
       refresh,
-      save,
-      saveAndStart,
-      bindSaveButton,
-      bindSaveAndStartButton,
+      applyProvider,
       getSnapshot: () => providerSnapshot,
     };
   }

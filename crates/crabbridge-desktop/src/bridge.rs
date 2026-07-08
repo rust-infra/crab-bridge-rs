@@ -172,10 +172,7 @@ impl BridgeManager {
                     let exit_result = handle.take_join_result().await;
                     {
                         let mut inner = manager.inner.lock().expect("bridge manager lock");
-                        inner.last_error = exit_result
-                            .as_ref()
-                            .err()
-                            .map(|err| err.to_string());
+                        inner.last_error = exit_result.as_ref().err().map(|err| err.to_string());
                     }
                     notify();
                 }
@@ -195,11 +192,6 @@ pub fn ensure_config_parent(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
-pub fn config_exists(path: &Path) -> bool {
-    path.is_file()
-}
-
 fn resolve_bind_addr(config_path: &Path, default_bind_addr: SocketAddr) -> SocketAddr {
     serve_args_for_desktop(config_path, default_bind_addr)
         .map(|args| args.bind_addr)

@@ -3,8 +3,9 @@
 mod autostart;
 mod bridge;
 mod clipboard;
+mod codex_config;
+mod dock;
 mod env_export;
-mod health;
 mod logs;
 mod notify;
 mod onboarding;
@@ -12,8 +13,7 @@ mod prefs;
 mod provider_config;
 mod secrets;
 mod settings;
-mod shell_env;
-mod setup_wizard;
+mod setup;
 mod tray;
 
 use std::net::SocketAddr;
@@ -23,12 +23,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use bridge::{BridgeManager, BridgeStatus, default_config_path, ensure_config_parent};
-use crabbridge_cli::setup::SetupCheckReport;
 use logs::LogSnapshot;
 use onboarding::OnboardingStatus;
 use provider_config::{ProviderConfigSaveRequest, ProviderConfigSnapshot};
 use secrets::{SecretStatus, hydrate_api_keys};
 use serde::Serialize;
+use setup::SetupCheckReport;
 use tauri::menu::MenuEvent;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -126,7 +126,7 @@ async fn bridge_open_admin(manager: State<'_, Arc<BridgeManager>>) -> Result<(),
 async fn bridge_run_setup(
     manager: State<'_, Arc<BridgeManager>>,
 ) -> Result<BridgeStatusResponse, String> {
-    setup_wizard::run_desktop_setup(manager.bind_addr(), manager.config_path(), false)
+    setup::run_desktop_setup(manager.bind_addr(), manager.config_path(), false)
         .await
         .map_err(|err| err.to_string())?;
     Ok(bridge_response(&manager))
@@ -176,6 +176,15 @@ fn provider_config_save(
 }
 
 #[tauri::command]
+fn set_active_codex_provider(
+    manager: State<'_, Arc<BridgeManager>>,
+    slug: String,
+) -> Result<String, String> {
+    setup::set_codex_active_provider(manager.bind_addr(), &slug).map_err(|err| err.to_string())?;
+    Ok(format!("Codex active provider set to {slug}"))
+}
+
+#[tauri::command]
 fn autostart_get(app: AppHandle) -> Result<bool, String> {
     autostart::is_enabled(&app).map_err(|err| err.to_string())
 }
@@ -191,7 +200,7 @@ fn autostart_set(app: AppHandle, enabled: bool) -> Result<(), String> {
 
 #[tauri::command]
 async fn config_check(manager: State<'_, Arc<BridgeManager>>) -> Result<SetupCheckReport, String> {
-    Ok(health::run_config_check(manager.bind_addr(), manager.config_path()).await)
+    Ok(setup::run_config_check(manager.bind_addr(), manager.config_path()).await)
 }
 
 #[tauri::command]
@@ -279,7 +288,9 @@ fn install_shell_hook(manager: State<'_, Arc<BridgeManager>>) -> Result<String, 
 
 #[tauri::command]
 fn codex_usage_hint(manager: State<'_, Arc<BridgeManager>>) -> Result<String, String> {
-    Ok(env_export::codex_usage_hint(&manager.bind_addr().to_string()))
+    Ok(env_export::codex_usage_hint(
+        &manager.bind_addr().to_string(),
+    ))
 }
 
 #[tauri::command]
@@ -305,12 +316,12 @@ async fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
             .map_err(|err| anyhow::anyhow!(err))
             .map(|_| ()),
         tray::MENU_SETUP => {
-            setup_wizard::run_desktop_setup(manager.bind_addr(), manager.config_path(), false)
+            setup::run_desktop_setup(manager.bind_addr(), manager.config_path(), false)
                 .await
                 .map(|_| ())
         }
         tray::MENU_CHECK => {
-            let report = health::run_config_check(manager.bind_addr(), manager.config_path()).await;
+            let report = setup::run_config_check(manager.bind_addr(), manager.config_path()).await;
             if report.has_failures() {
                 if let Err(err) = settings::open_settings(app) {
                     Err(anyhow::anyhow!(err))
@@ -364,16 +375,18 @@ async fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
     refresh_tray_state(app, &manager).await;
 }
 
-async fn bootstrap_existing(app_handle: &AppHandle, manager: Arc<BridgeManager>) {
+async fn bootstrap_existing(app_handle: &AppHandle, manager: Arc<BridgeManager>) -> Result<()> {
     match manager.start().await {
         Ok(()) => {
             notify::show_info(app_handle, "CrabBridge", "Bridge started");
             refresh_tray_state(app_handle, &manager).await;
+            Ok(())
         }
         Err(err) => {
             tracing::error!(error = %err, "auto-start failed");
             notify::show_error(app_handle, &format!("Auto-start failed: {err}"));
             emit_bridge_status(app_handle, &manager);
+            Err(err)
         }
     }
 }
@@ -383,19 +396,22 @@ fn start_ready_tasks(app_handle: &AppHandle) {
         return;
     };
     let manager = manager.inner().clone();
+    let config_dir = manager.config_dir().to_path_buf();
+    let first_launch = prefs::needs_onboarding(&config_dir).unwrap_or(true);
 
-    let onboarding_done = !prefs::needs_onboarding(manager.config_dir()).unwrap_or(true)
-        && bridge::config_exists(&manager.config_path());
+    tracing::info!("starting bridge in background");
+    let app = app_handle.clone();
+    let bootstrap_manager = manager.clone();
+    tauri::async_runtime::spawn(async move {
+        if bootstrap_existing(&app, bootstrap_manager).await.is_ok()
+            && let Err(err) = prefs::mark_onboarding_complete(&config_dir)
+        {
+            tracing::warn!(error = %err, "failed to mark onboarding complete");
+        }
+    });
 
-    if onboarding_done {
-        tracing::info!("onboarding complete — tray only, starting bridge in background");
-        let app = app_handle.clone();
-        let bootstrap_manager = manager.clone();
-        tauri::async_runtime::spawn(async move {
-            bootstrap_existing(&app, bootstrap_manager).await;
-        });
-    } else {
-        tracing::info!("first-run setup — opening welcome window");
+    if first_launch {
+        tracing::info!("first launch — opening welcome window");
         if let Err(err) = settings::open_welcome(app_handle) {
             tracing::error!(error = %err, "failed to open welcome window");
             let _ = settings::open_settings(app_handle);
@@ -451,6 +467,10 @@ pub fn run() -> Result<()> {
                 });
             })?;
 
+            if let Err(err) = dock::apply_dock_icon() {
+                tracing::warn!(error = %err, "failed to set macOS dock icon");
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -465,6 +485,7 @@ pub fn run() -> Result<()> {
             secrets_clear,
             provider_config_get,
             provider_config_save,
+            set_active_codex_provider,
             autostart_get,
             autostart_set,
             config_check,
@@ -485,6 +506,13 @@ pub fn run() -> Result<()> {
         .run(|app_handle, event| {
             static READY_TASKS: Once = Once::new();
             if let tauri::RunEvent::Ready = event {
+                let app = app_handle.clone();
+                let _ = app.run_on_main_thread(move || {
+                    if let Err(err) = dock::apply_dock_icon() {
+                        tracing::warn!(error = %err, "failed to refresh macOS dock icon");
+                    }
+                });
+
                 READY_TASKS.call_once(|| {
                     let app = app_handle.clone();
                     tauri::async_runtime::spawn(async move {

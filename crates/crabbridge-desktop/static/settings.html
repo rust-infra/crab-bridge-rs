@@ -7,46 +7,53 @@
   <link rel="stylesheet" href="native-ui.css" />
 </head>
 <body class="settings">
-  <header class="settings-header">
-    <h1 data-i18n="settings.title">Settings</h1>
-    <p class="lead" data-i18n="settings.lead">App preferences only. Provider and bridge setup are in Setup Wizard.</p>
-    <div class="row" style="margin-top: 12px;">
-      <button class="secondary" id="open-welcome" data-i18n="settings.back_home">Back to Home</button>
-    </div>
-  </header>
+  <div class="page-shell">
+    <header class="settings-header">
+      <h1 data-i18n="settings.title">Settings</h1>
+      <p class="lead" data-i18n="settings.lead">App preferences only. Provider and bridge setup are in Setup Wizard.</p>
+      <div class="action-bar settings-nav">
+        <button class="secondary" id="open-welcome" data-i18n="settings.back_home">Back to Home</button>
+      </div>
+    </header>
 
-  <section class="card">
-    <h2 data-i18n="settings.theme">Theme</h2>
-    <label class="field-label" for="lang-select" data-i18n="settings.language">Language</label>
-    <select id="lang-select" class="pref-select">
-      <option value="en" data-i18n="settings.lang.en">English</option>
-      <option value="zh" data-i18n="settings.lang.zh">简体中文</option>
-    </select>
-    <label class="field-label" for="theme-select" data-i18n="settings.theme">Theme</label>
-    <select id="theme-select" class="pref-select">
-      <option value="system" data-i18n="settings.theme.system">Follow system</option>
-      <option value="light" data-i18n="settings.theme.light">Light</option>
-      <option value="dark" data-i18n="settings.theme.dark">Dark</option>
-    </select>
-    <p class="field-hint" id="theme-note" style="margin-top: 8px;" data-i18n="settings.theme_note">Theme and language preferences apply to the desktop app UI.</p>
-  </section>
+    <section class="card">
+      <h2 data-i18n="settings.appearance">Appearance</h2>
+      <p class="card-desc" data-i18n="settings.theme_note">Theme and language apply instantly across open windows.</p>
+      <label class="field-label" for="lang-select" data-i18n="settings.language">Language</label>
+      <select id="lang-select" class="pref-select">
+        <option value="en" data-i18n="settings.lang.en">English</option>
+        <option value="zh" data-i18n="settings.lang.zh">简体中文</option>
+      </select>
+      <label class="field-label" for="theme-select" data-i18n="settings.theme">Theme</label>
+      <select id="theme-select" class="pref-select">
+        <option value="system" data-i18n="settings.theme.system">Follow system</option>
+        <option value="light" data-i18n="settings.theme.light">Light</option>
+        <option value="dark" data-i18n="settings.theme.dark">Dark</option>
+      </select>
+    </section>
 
-  <section class="card">
-    <h2 data-i18n="settings.startup">Startup</h2>
-    <label class="checkbox-row"><input type="checkbox" id="autostart" /> <span data-i18n="settings.launch_login">Launch CrabBridge at login</span></label>
-  </section>
+    <section class="card">
+      <h2 data-i18n="settings.startup">Startup</h2>
+      <label class="checkbox-row"><input type="checkbox" id="autostart" /> <span data-i18n="settings.launch_login">Launch CrabBridge at login</span></label>
+    </section>
 
-  <section class="card">
-    <h2 data-i18n="settings.logs">Logs</h2>
-    <div class="row">
-      <button class="secondary" id="refresh-logs" data-i18n="settings.logs_refresh">Refresh</button>
-      <button class="secondary" id="reveal-logs" data-i18n="settings.logs_reveal">Reveal Directory</button>
-    </div>
-    <p class="field-hint" id="log-path" style="margin-top: 12px;">-</p>
-    <pre id="log-lines" class="logs" data-i18n="settings.logs_empty">(no log lines yet)</pre>
-  </section>
+    <section class="card logs-card">
+      <div class="card-header">
+        <h2 data-i18n="settings.logs">Logs</h2>
+        <div class="row">
+          <button class="secondary" id="refresh-logs" data-i18n="settings.logs_refresh">Refresh</button>
+          <button class="secondary" id="reveal-logs" data-i18n="settings.logs_reveal">Reveal Directory</button>
+        </div>
+      </div>
+      <div class="logs-viewport">
+        <p class="logs-path" id="log-path" hidden></p>
+        <pre id="log-lines" class="logs" hidden></pre>
+        <p id="log-empty" class="logs-empty" hidden></p>
+      </div>
+    </section>
 
-  <div id="message"></div>
+    <div id="message" class="settings-message"></div>
+  </div>
 
   <script src="ui-prefs.js"></script>
   <script>
@@ -71,9 +78,10 @@
       langSelect.value = window.CrabUi.getLang();
       themeSelect.value = window.CrabUi.getTheme();
 
-      langSelect.addEventListener("change", (event) => {
+      langSelect.addEventListener("change", async (event) => {
         window.CrabUi.setLang(event.target.value);
-        setMessage(window.CrabUi.t("settings.msg.theme_updated"));
+        setMessage(window.CrabUi.t("settings.msg.lang_updated"));
+        await refreshLogs();
       });
 
       themeSelect.addEventListener("change", (event) => {
@@ -97,9 +105,21 @@
 
       async function refreshLogs() {
         const snapshot = await invoke("logs_tail", { limit: 200 });
-        document.getElementById("log-path").textContent = snapshot.path;
-        document.getElementById("log-lines").textContent =
-          snapshot.lines.length ? snapshot.lines.join("\n") : window.CrabUi.t("settings.logs_empty");
+        const logPath = document.getElementById("log-path");
+        const logLines = document.getElementById("log-lines");
+        const logEmpty = document.getElementById("log-empty");
+
+        logPath.hidden = false;
+        logPath.textContent = snapshot.path;
+        if (snapshot.lines.length) {
+          logLines.hidden = false;
+          logEmpty.hidden = true;
+          logLines.textContent = snapshot.lines.join("\n");
+        } else {
+          logLines.hidden = true;
+          logEmpty.hidden = false;
+          logEmpty.textContent = window.CrabUi.t("settings.logs_empty");
+        }
       }
 
       document.getElementById("refresh-logs").addEventListener("click", refreshLogs);
@@ -113,6 +133,10 @@
 
       await refreshAutostart();
       await refreshLogs();
+
+      window.addEventListener("crabbridge:prefs-changed", () => {
+        refreshLogs().catch((err) => setMessage(String(err)));
+      });
     }
 
     if (document.readyState === "loading") {

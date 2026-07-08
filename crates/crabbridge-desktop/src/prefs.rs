@@ -21,8 +21,8 @@ pub fn load_prefs(config_dir: &Path) -> Result<DesktopPrefs> {
     if !path.is_file() {
         return Ok(DesktopPrefs::default());
     }
-    let body = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let body =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_str(&body).with_context(|| format!("failed to parse {}", path.display()))
 }
 

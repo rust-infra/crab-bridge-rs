@@ -19,15 +19,20 @@
     return tauri.core.invoke;
   }
 
-  function shouldShowHome(status) {
-    return status.onboarding_complete && status.bridge_config_exists;
+  function shouldShowHome(_status) {
+    return true;
   }
 
-  function setView(mode) {
+  function setView(mode, options = {}) {
     const home = mode === "home";
     byId("view-home").hidden = !home;
     byId("view-setup").hidden = home;
     byId("welcome-header").classList.toggle("is-home", home);
+
+    const backHome = byId("setup-back-home");
+    if (backHome) {
+      backHome.hidden = options.hideBackHome ?? false;
+    }
 
     if (home) {
       byId("welcome-title").textContent = tr("welcome.title.home");
@@ -69,6 +74,7 @@
   }
 
   async function refreshHome(invoke) {
+    setMessage("");
     const bridge = await invoke("bridge_status");
     applyBridgeUi(bridge);
 
@@ -98,20 +104,17 @@
       await cfg.refresh();
 
       const status = await invoke("onboarding_status");
+      const bridge = await invoke("bridge_status");
+      const bridgeReady = bridge.status === "running";
       byId("setup-status").textContent = status.bridge_config_exists
         ? tr("welcome.msg.bridge_config_ready")
-        : tr("welcome.msg.bridge_config_not_ready");
+        : bridgeReady
+          ? tr("welcome.msg.bridge_builtin_ready")
+          : tr("welcome.msg.bridge_config_not_ready");
       byId("setup-status").className =
-        "status-line" + (status.bridge_config_exists ? " ok" : "");
+        "status-line" + (status.bridge_config_exists || bridgeReady ? " ok" : "");
 
-      const active = (await invoke("provider_config_get", { slug: null })).providers.find(
-        (p) => p.is_active
-      );
-      if (!active?.configured && !status.bridge_config_exists) {
-        setMessage(tr("welcome.msg.save_provider_first"));
-      } else {
-        setMessage("");
-      }
+      setMessage("");
 
       return status;
     }
@@ -122,7 +125,7 @@
         setView("home");
         await refreshHome(invoke);
       } else {
-        setView("setup");
+        setView("setup", { hideBackHome: true });
         await refreshSetup();
       }
     }
@@ -131,7 +134,7 @@
       try {
         const bridge = await invoke("bridge_start");
         applyBridgeUi(bridge);
-        setMessage(tr("welcome.msg.bridge_started"));
+        setMessage("");
       } catch (err) {
         setMessage(String(err));
         await refreshHome(invoke);
@@ -167,14 +170,9 @@
       await refreshHome(invoke);
     });
 
-    byId("complete-setup").addEventListener("click", async () => {
-      setMessage(tr("welcome.msg.applying"));
+    byId("set-codex-provider").addEventListener("click", async () => {
       try {
-        await initProviderConfig().save();
-        await invoke("onboarding_run_setup");
-        await invoke("onboarding_finish");
-        setMessage(tr("welcome.msg.applied"));
-        await applyViewFromStatus();
+        await initProviderConfig().applyProvider();
       } catch (err) {
         setMessage(String(err));
       }
@@ -183,6 +181,18 @@
     window.addEventListener("focus", () => {
       if (!byId("view-home").hidden) {
         refreshHome(invoke).catch((err) => setMessage(String(err)));
+      }
+    });
+
+    window.addEventListener("crabbridge:prefs-changed", async () => {
+      window.CrabUi?.applyI18n?.();
+      const status = await invoke("onboarding_status");
+      if (shouldShowHome(status)) {
+        setView("home");
+        await refreshHome(invoke);
+      } else {
+        setView("setup", { hideBackHome: !status.onboarding_complete });
+        await refreshSetup();
       }
     });
 
