@@ -66,7 +66,6 @@ pub fn prepare_app_for_window(app: &AppHandle) {
             tracing::warn!(error = %err, "failed to set macOS dock icon");
         }
     }
-    let _ = app.show();
 }
 
 fn open_window(
