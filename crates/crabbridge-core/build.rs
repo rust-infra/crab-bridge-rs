@@ -10,10 +10,7 @@ use std::process::Command;
 
 fn normalize_version(raw: &str) -> String {
     let trimmed = raw.trim();
-    trimmed
-        .strip_prefix('v')
-        .unwrap_or(trimmed)
-        .to_string()
+    trimmed.strip_prefix('v').unwrap_or(trimmed).to_string()
 }
 
 fn version_from_github() -> Option<String> {
