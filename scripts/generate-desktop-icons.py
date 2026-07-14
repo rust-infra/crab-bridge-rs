@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate CrabBridge desktop icons (RGBA PNG)."""
+"""Generate CrabBridge desktop icons (RGBA PNG + Windows ICO)."""
 
 from __future__ import annotations
 
@@ -25,6 +25,23 @@ def png(w: int, h: int, pixels: bytes) -> bytes:
 
     ihdr = struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", compressed) + chunk(b"IEND", b"")
+
+
+def ico(png_images: list[bytes]) -> bytes:
+    """Build a multi-size ICO container with embedded PNG payloads (Vista+)."""
+    count = len(png_images)
+    header = struct.pack("<HHH", 0, 1, count)
+    # ICONDIRENTRY is 16 bytes; image data follows the directory.
+    offset = 6 + 16 * count
+    entries = bytearray()
+    payload = bytearray()
+    for data in png_images:
+        # Width/height are stored as one byte; 0 means 256.
+        # Embedded PNGs carry their own dimensions, so 0 is fine for 256+.
+        entries.extend(struct.pack("<BBBBHHII", 0, 0, 0, 0, 1, 32, len(data), offset))
+        payload.extend(data)
+        offset += len(data)
+    return bytes(header + entries + payload)
 
 
 def render(size: int) -> bytes:
@@ -71,15 +88,24 @@ def render(size: int) -> bytes:
 
 def main() -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
-    for name, size in [
+    png_sizes = [
         ("icon.png", 512),
         ("128x128@2x.png", 256),
         ("128x128.png", 128),
         ("32x32.png", 32),
-    ]:
+    ]
+    for name, size in png_sizes:
         path = ROOT / name
         path.write_bytes(png(size, size, render(size)))
         print(f"wrote {path}")
+
+    # Windows tauri-build requires icons/icon.ico for the PE resource file.
+    ico_pngs = [
+        png(size, size, render(size)) for size in (256, 128, 64, 48, 32, 16)
+    ]
+    ico_path = ROOT / "icon.ico"
+    ico_path.write_bytes(ico(ico_pngs))
+    print(f"wrote {ico_path}")
 
 
 if __name__ == "__main__":
