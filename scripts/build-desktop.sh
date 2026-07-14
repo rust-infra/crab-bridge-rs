@@ -14,9 +14,14 @@ if ! command -v cargo-tauri >/dev/null 2>&1 && ! cargo tauri --version >/dev/nul
   cargo install tauri-cli --locked
 fi
 
+# Embed current git tag / describe into the binary and package metadata.
+# shellcheck disable=SC1091
+source "${ROOT}/scripts/sync-version-from-git.sh"
+export CRABBRIDGE_VERSION
+
 python3 "${ROOT}/scripts/generate-desktop-icons.py"
 
-log "building CrabBridge desktop bundle"
+log "building CrabBridge desktop bundle (version=${CRABBRIDGE_VERSION})"
 (
   cd "${DESKTOP_DIR}"
   cargo tauri build

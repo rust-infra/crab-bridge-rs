@@ -8,6 +8,8 @@ use axum::{
 };
 use serde::Serialize;
 
+use crabbridge_core::VERSION;
+
 use crate::cache::CacheStats;
 use crate::metrics::MetricsSnapshot;
 use crate::session::{SessionDetail, SessionStats};
@@ -205,7 +207,7 @@ fn build_overview(state: &AppState) -> OverviewResponse {
         .collect();
 
     OverviewResponse {
-        version: env!("CARGO_PKG_VERSION"),
+        version: VERSION,
         providers,
         metrics: state.metrics.snapshot(state.started_at),
         sessions: state.sessions.stats(),
@@ -260,7 +262,7 @@ mod tests {
     #[test]
     fn overview_contains_version_and_providers() {
         let overview = build_overview(&test_state());
-        assert_eq!(overview.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(overview.version, VERSION);
         assert_eq!(overview.providers.len(), 1);
         assert!(!overview.cache.enabled);
     }

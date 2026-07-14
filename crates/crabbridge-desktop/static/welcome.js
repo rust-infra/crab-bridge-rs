@@ -94,6 +94,8 @@
     byId("home-provider").textContent = active
       ? `${active.label} (${active.slug})`
       : tr("welcome.meta.not_configured");
+    const version = await invoke("app_version");
+    byId("home-version").textContent = version ? `v${version}` : "—";
     byId("home-hint").textContent = await invoke("codex_usage_hint");
 
     return bridge;

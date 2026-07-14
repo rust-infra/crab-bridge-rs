@@ -124,7 +124,7 @@ Workflow: [`.github/workflows/build-desktop.yml`](.github/workflows/build-deskto
 
 Before the first run, enable **Settings → Actions → General → Workflow permissions → Read and write permissions**.
 
-Version comes from `crates/crabbridge-desktop/tauri.conf.json` — bump it before tagging.
+Release builds sync the version from the git tag via `scripts/sync-version-from-git.sh` (writes `Cargo.toml` + `tauri.conf.json` and sets `CRABBRIDGE_VERSION` for compile-time embedding). Local `crabridge --version`, `/admin`, and the desktop home screen show `crabbridge_core::VERSION` (tag / `git describe`).
 
 ## Development
 

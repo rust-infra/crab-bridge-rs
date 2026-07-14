@@ -9,6 +9,7 @@ use crabbridge_core::config::default_config_path;
 #[derive(Parser, Debug)]
 #[command(
     name = "crabridge",
+    version = crabbridge_core::VERSION,
     about = "Bridge Codex CLI (Responses API) to DeepSeek / Kimi Chat Completions"
 )]
 pub struct BridgeCli {

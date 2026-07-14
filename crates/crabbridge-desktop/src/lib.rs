@@ -78,6 +78,11 @@ async fn refresh_tray_state(app: &AppHandle, manager: &BridgeManager) {
 }
 
 #[tauri::command]
+fn app_version() -> String {
+    crabbridge_core::VERSION.to_string()
+}
+
+#[tauri::command]
 async fn bridge_status(
     manager: State<'_, Arc<BridgeManager>>,
 ) -> Result<BridgeStatusResponse, String> {
@@ -474,6 +479,7 @@ pub fn run() -> Result<()> {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            app_version,
             bridge_status,
             bridge_start,
             bridge_stop,

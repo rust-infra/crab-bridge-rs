@@ -4,3 +4,6 @@ pub mod config;
 pub mod provider;
 pub mod runtime;
 pub mod types;
+pub mod version;
+
+pub use version::VERSION;

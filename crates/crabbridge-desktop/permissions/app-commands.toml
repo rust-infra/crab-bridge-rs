@@ -2,6 +2,7 @@
 identifier = "app-commands"
 description = "CrabBridge desktop invoke commands for settings and onboarding UI."
 commands.allow = [
+  "app_version",
   "bridge_status",
   "bridge_start",
   "bridge_stop",
