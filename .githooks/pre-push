@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Pre-push: keep shared branch quality bars (fmt + clippy).
+# Bypass once with: SKIP_PRE_PUSH=1 git push
+set -euo pipefail
+
+if [[ "${SKIP_PRE_PUSH:-}" == "1" ]]; then
+  echo "pre-push: skipped (SKIP_PRE_PUSH=1)"
+  exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "${ROOT}"
+
+echo "pre-push: cargo fmt --check --all"
+cargo fmt --check --all
+
+echo "pre-push: cargo clippy --workspace -- -D warnings"
+cargo clippy --workspace -- -D warnings
+
+echo "pre-push: ok"
+exit 0

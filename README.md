@@ -129,6 +129,9 @@ Version comes from `crates/crabbridge-desktop/tauri.conf.json` — bump it befor
 ## Development
 
 ```bash
+# Enable versioned git hooks (fmt + clippy before every push)
+./scripts/install-githooks.sh
+
 cargo build --workspace --release
 cargo run --bin crabridge -- serve
 cargo run --bin crabbridge-desktop
@@ -136,6 +139,8 @@ cargo run --bin crabbridge-desktop
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
 ```
+
+`pre-push` lives in [`.githooks/pre-push`](.githooks/pre-push). Bypass once with `SKIP_PRE_PUSH=1 git push`.
 
 **Layout:** `crabbridge-core` (types, config, provider, runtime) · `crabbridge-server` (`crabridge` HTTP bridge) · `crabbridge-desktop` (Tauri 2 tray app).
 
