@@ -27,18 +27,26 @@ def png(w: int, h: int, pixels: bytes) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", compressed) + chunk(b"IEND", b"")
 
 
-def ico(png_images: list[bytes]) -> bytes:
-    """Build a multi-size ICO container with embedded PNG payloads (Vista+)."""
+def ico(png_images: list[tuple[int, bytes]]) -> bytes:
+    """Build a multi-size ICO container with embedded PNG payloads (Vista+).
+
+    Each entry is ``(size, png_bytes)``. ICONDIRENTRY width/height must match the
+    embedded PNG; a stored value of 0 means 256.
+    """
     count = len(png_images)
     header = struct.pack("<HHH", 0, 1, count)
     # ICONDIRENTRY is 16 bytes; image data follows the directory.
     offset = 6 + 16 * count
     entries = bytearray()
     payload = bytearray()
-    for data in png_images:
-        # Width/height are stored as one byte; 0 means 256.
-        # Embedded PNGs carry their own dimensions, so 0 is fine for 256+.
-        entries.extend(struct.pack("<BBBBHHII", 0, 0, 0, 0, 1, 32, len(data), offset))
+    for size, data in png_images:
+        if size < 1 or size > 256:
+            raise ValueError(f"ICO size must be 1..=256, got {size}")
+        # Width/height are one byte each; 0 means 256.
+        dim = 0 if size == 256 else size
+        entries.extend(
+            struct.pack("<BBBBHHII", dim, dim, 0, 0, 1, 32, len(data), offset)
+        )
         payload.extend(data)
         offset += len(data)
     return bytes(header + entries + payload)
@@ -99,9 +107,9 @@ def main() -> None:
         path.write_bytes(png(size, size, render(size)))
         print(f"wrote {path}")
 
-    # Windows tauri-build requires icons/icon.ico for the PE resource file.
+    # Windows/macOS tauri-build decode ICONDIRENTRY sizes against PNG IHDR.
     ico_pngs = [
-        png(size, size, render(size)) for size in (256, 128, 64, 48, 32, 16)
+        (size, png(size, size, render(size))) for size in (256, 128, 64, 48, 32, 16)
     ]
     ico_path = ROOT / "icon.ico"
     ico_path.write_bytes(ico(ico_pngs))

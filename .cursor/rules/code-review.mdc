@@ -1,0 +1,65 @@
+---
+description: "Code review checklist — cover Rust, JS/HTML/CSS, scripts, docs, Docker/CI, and config when reviewing changes"
+alwaysApply: false
+---
+
+# CrabBridge Code Review
+
+When reviewing PRs, diffs, or local changes, **do not only look at Rust**. Audit every touched surface below that appears in the diff. Prefer concrete bugs, security issues, and broken contracts over style nits.
+
+## Scope — always scan these if present in the change
+
+| Area | Paths / examples |
+|------|------------------|
+| Rust | `crates/**/*.rs`, workspace `Cargo.toml` / lockfile |
+| Desktop / admin UI | `crates/crabbridge-desktop/static/**` (`.js` / `.html` / `.css`), `crates/crabbridge-server/static/**` |
+| Scripts | `scripts/**`, `build-release.sh`, `.githooks/**` |
+| Docs | `README.md`, `AGENT_SPEC.md`, `.cursor/rules/**` |
+| Packaging / CI | `Dockerfile`, `docker-compose.yml`, `docker/**`, `.github/workflows/**` |
+| Config examples | `crabbridge.example.toml`, `crabbridge.docker.toml`, `tauri.conf.json` |
+
+## Rust
+
+- `cargo fmt` / `clippy --workspace -- -D warnings` expectations still hold
+- No `unwrap`/`expect` outside tests; propagate with `?` / `anyhow` / `BridgeError`
+- API keys never logged or hardcoded; Bearer tokens only forwarded
+- Provider routes, model maps, and session persistence stay consistent across crates
+- New public behavior covered by unit/integration tests when practical
+- Desktop Tauri IPC / window / tray changes check macOS + Linux + Windows implications
+
+## JavaScript / HTML / CSS (desktop & admin)
+
+- Prefer small, readable modules; avoid leaking secrets into `localStorage` / UI text
+- Tauri `invoke` / event names must match Rust command handlers
+- XSS: do not inject untrusted strings as HTML; prefer textContent / safe templating
+- CSS/layout must remain usable for onboarding, settings, and admin views
+- Broken relative asset paths (icons, CSS, JS) and missing `icons/icon.ico` metadata are release blockers
+
+## Scripts (bash / PowerShell / Python)
+
+- `set -euo pipefail` (bash) or equivalent fail-fast in PowerShell where appropriate
+- Paths and binary names work on the documented platforms
+- No secrets in script defaults, echo, or committed env files
+- Icon / asset generators must keep format metadata consistent (e.g. ICO entry size ↔ PNG IHDR)
+- Install / githook scripts are idempotent and document bypass flags (`SKIP_PRE_PUSH`, etc.)
+
+## Docs & rules
+
+- README / AGENT_SPEC match actual CLI flags, ports, config keys, and install paths
+- Env var names (`DEEPSEEK_API_KEY`, `KIMI_API_KEY`, `CRABRIDGE_*`) stay accurate
+- Removed features or crates are fully scrubbed from docs and examples
+- Cursor rules stay aligned with workspace layout (`crabbridge-core` / `server` / `desktop`)
+
+## Docker / CI / packaging
+
+- Workflows install required OS deps; tag triggers and artifact paths are correct
+- Docker bind address is `0.0.0.0` in containers; ports and volumes documented
+- Desktop CI regenerates icons before `tauri build` when generators change
+
+## Review output format
+
+1. Summary (1–3 sentences)
+2. Findings ordered by severity: **blocker** → **major** → **nit**
+3. Each finding: file path, what’s wrong, why it matters, suggested fix
+4. Explicitly call out areas **not** reviewed if the diff was too large
+5. If only Rust was inspected, that is a failed review — go back and cover other touched files
